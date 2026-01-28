@@ -1,0 +1,205 @@
+import bpy
+from .utils import *
+import json
+
+
+class PARAM_OT_TestOperator(bpy.types.Operator):
+    bl_idname = "param.test_operator"
+    bl_label = "测试操作"
+
+    def execute(self, context):
+        print(bpy.app.translations.pgettext("Test Operator Executed"))
+
+        ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+        ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+        activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 活动的快照集合
+        Param_properties_coll = activite_snap.Param_properties_coll
+        Param_properties_coll_index = activite_snap.Param_properties_coll_index
+        activite_item = Param_properties_coll[Param_properties_coll_index]
+        val, tag, meta = get_value_and_type_from_path(activite_item.property_path)
+        print("Value:", val, "Type:", tag, "Meta:", meta)
+        return {"FINISHED"}
+
+
+class PARAM_OT_GenericAddItem(bpy.types.Operator):
+    bl_idname = "param.add_item_generic"
+    bl_label = "Add Item"
+    bl_options = {"REGISTER", "UNDO"}
+
+    # 定义接收路径的参数
+    coll_path: bpy.props.StringProperty()
+    index_path: bpy.props.StringProperty()
+
+    def execute(self, context):
+        # 使用 rna_path_resolve 动态获取集合对象和索引
+        try:
+            coll = context.path_resolve(self.coll_path)
+            new_item = coll.add()
+            path_parts = self.index_path.rsplit(".", 1)
+            target_data = context.path_resolve(path_parts[0])
+            prop_name = path_parts[1]
+
+            setattr(target_data, prop_name, len(coll) - 1)
+
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Path Error: {str(e)}")
+            return {"CANCELLED"}
+
+
+class PARAM_OT_GenericRemoveItem(bpy.types.Operator):
+    bl_idname = "param.remove_item_generic"
+    bl_label = "Remove Item"
+    bl_options = {"REGISTER", "UNDO"}
+
+    coll_path: bpy.props.StringProperty()
+    index_path: bpy.props.StringProperty()
+
+    def execute(self, context):
+        try:
+            coll = context.path_resolve(self.coll_path)
+
+            # 获取当前索引
+            path_parts = self.index_path.rsplit(".", 1)
+            target_data = context.path_resolve(path_parts[0])
+            prop_name = path_parts[1]
+            idx = getattr(target_data, prop_name)
+
+            if len(coll) > 0 and 0 <= idx < len(coll):
+                coll.remove(idx)
+                # 安全更新索引，防止越界
+                setattr(target_data, prop_name, max(0, idx - 1))
+                return {"FINISHED"}
+
+            return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Remove Error: {str(e)}")
+            return {"CANCELLED"}
+
+
+class PARAM_OT_GenericMoveItem(bpy.types.Operator):
+    bl_idname = "param.move_item_generic"
+    bl_label = "Move Item"
+    bl_options = {"REGISTER", "UNDO"}
+
+    coll_path: bpy.props.StringProperty()
+    index_path: bpy.props.StringProperty()
+    # 方向参数：'UP' 或 'DOWN'
+    direction: bpy.props.EnumProperty(items=[("UP", "Up", ""), ("DOWN", "Down", "")], default="UP")
+
+    def execute(self, context):
+        try:
+            coll = context.path_resolve(self.coll_path)
+
+            path_parts = self.index_path.rsplit(".", 1)
+            target_data = context.path_resolve(path_parts[0])
+            prop_name = path_parts[1]
+            idx = getattr(target_data, prop_name)
+
+            if self.direction == "UP" and idx > 0:
+                coll.move(idx, idx - 1)
+                setattr(target_data, prop_name, idx - 1)
+            elif self.direction == "DOWN" and idx < len(coll) - 1:
+                coll.move(idx, idx + 1)
+                setattr(target_data, prop_name, idx + 1)
+
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Move Error: {str(e)}")
+            return {"CANCELLED"}
+
+
+class PARAMS_OT_AddParamToCol(bpy.types.Operator):
+    bl_idname = "param.add_param_to_col"
+    bl_label = "Add Param to Col"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        # 获取数据路径
+        bpy.ops.ui.copy_data_path_button(full_path=True)
+        full_path = context.window_manager.clipboard
+        # bpy.ops.ui.copy_data_path_button(full_path=False)
+        # path = context.window_manager.clipboard
+        # print("COPIED PATH:", full_path, path)
+        ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+        ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+        activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 活动的快照集合
+        Param_properties_coll = activite_snap.Param_properties_coll
+        new_item = Param_properties_coll.add()
+        new_item.name = get_ui_name_from_path(full_path)
+        new_item.property_path = full_path
+        activite_snap.Param_properties_coll_index = len(Param_properties_coll) - 1
+        self.report({"INFO"}, f"Added Parameter to Collection {full_path}")
+        # 刷新界面
+        for area in context.screen.areas:
+            area.tag_redraw()
+
+        value_copy, type_tag, meta = get_value_and_type_from_path(new_item.property_path)
+        print("完整数据路径:", full_path)
+        print("Value:", value_copy, "Type:", type_tag, "Meta:", meta)
+        assign_stored_from_value(new_item, value_copy, type_tag, meta)
+        print("数据类型", new_item.stored_kind, "meta:", new_item.stored_json)
+        return {"FINISHED"}
+
+
+class PARAM_OT_SyncParamOperator(bpy.types.Operator):
+    bl_idname = "param.sync_param"
+    bl_label = "同步参数"
+    bl_options = {"REGISTER", "UNDO"}
+
+    ParamIndex: bpy.props.IntProperty()
+
+    def execute(self, context):
+        ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+        ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+        activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 指定的快照集合
+        param_item = activite_snap.Param_properties_coll[self.ParamIndex]  # 指定的参数项
+        try:
+            flag = apply_stored_to_target(param_item)
+            if flag == None:
+                self.report({"ERROR"}, f"同步失败: {param_item.name}")
+            # 立即刷新视图
+            for area in context.screen.areas:
+                area.tag_redraw()
+        except Exception as e:
+            # self.report({"ERROR"}, f"同步失败: {param_item.name},{e}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class PARAM_OT_SyncAllParamsOperator(bpy.types.Operator):
+    bl_idname = "param.sync_all_params"
+    bl_label = "同步所有参数"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        coll = context.scene.paramsnap_properties.ParamSnap_properties_coll[context.scene.paramsnap_properties.ParamSnap_properties_coll_index]
+        for i in range(len(coll.Param_properties_coll)):
+            try:
+                bpy.ops.param.sync_param(ParamIndex=i)
+            except Exception as e:
+                self.report({"ERROR"}, f"{e}")
+        # 刷新界面
+        for area in context.screen.areas:
+            area.tag_redraw()
+        return {"FINISHED"}
+
+
+def register():
+    bpy.utils.register_class(PARAM_OT_TestOperator)
+    bpy.utils.register_class(PARAM_OT_GenericAddItem)
+    bpy.utils.register_class(PARAM_OT_GenericRemoveItem)
+    bpy.utils.register_class(PARAM_OT_GenericMoveItem)
+    bpy.utils.register_class(PARAMS_OT_AddParamToCol)
+    bpy.utils.register_class(PARAM_OT_SyncParamOperator)
+    bpy.utils.register_class(PARAM_OT_SyncAllParamsOperator)
+
+
+def unregister():
+    bpy.utils.unregister_class(PARAM_OT_TestOperator)
+    bpy.utils.unregister_class(PARAM_OT_GenericAddItem)
+    bpy.utils.unregister_class(PARAM_OT_GenericRemoveItem)
+    bpy.utils.unregister_class(PARAM_OT_GenericMoveItem)
+    bpy.utils.unregister_class(PARAMS_OT_AddParamToCol)
+    bpy.utils.unregister_class(PARAM_OT_SyncParamOperator)
+    bpy.utils.unregister_class(PARAM_OT_SyncAllParamsOperator)
