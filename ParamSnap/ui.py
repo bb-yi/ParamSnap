@@ -14,9 +14,10 @@ class PARAMS_UL_SnapshotList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         row = layout.row(align=True)
         # ---- ① 编号（极窄） ----
-        num = row.row(align=True)
-        num.alignment = "RIGHT"
-        num.label(text=f"{index+1}:")
+        num_col = row.column(align=True)
+        num_col.ui_units_x = 1  # 这一列固定宽度，自己微调到合适
+        num_col.alignment = "LEFT"
+        num_col.label(text=f"{index+1}:")
         row.prop(item, "name", text="", icon="BOOKMARKS")
 
 
@@ -73,9 +74,10 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
         row = layout.row(align=True)
 
         # ---- ① 编号（极窄） ----
-        num = row.row(align=True)
-        num.alignment = "RIGHT"
-        num.label(text=f"{index+1}:")
+        num_col = row.column(align=True)
+        num_col.ui_units_x = 1  # 这一列固定宽度，自己微调到合适
+        num_col.alignment = "LEFT"
+        num_col.label(text=f"{index+1}:")
         main_split = row.split(factor=0.2, align=True)
         # ---- ② 名称 ----
         name_col = main_split.row()
@@ -109,6 +111,7 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
         col = layout.column()
         row = col.row(align=True)
         col.label(text=translations("快照列表"))
+        col.label(text=translations("使用方法:  右键任意参数,添加到活动快照"), icon="INDIRECT_ONLY_ON")
         row = col.row(align=True)
         row.template_list("PARAMS_UL_SnapshotList", "", scene.paramsnap_properties, "ParamSnap_properties_coll", scene.paramsnap_properties, "ParamSnap_properties_coll_index", rows=6)
         col1 = row.column(align=True)
@@ -195,6 +198,9 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
         col = layout.column(align=True)
         col.scale_y = 2.0
         col.operator("param.sync_all_params", text="同步所有参数", icon="FILE_REFRESH")
+        col = layout.column()
+        col.operator("param.copy_snapshot", text="复制快照", icon="COPYDOWN")
+
         col = layout.column()
         version_str = ".".join(map(str, bl_info["version"]))
         col.alignment = "EXPAND"

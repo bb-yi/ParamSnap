@@ -11,7 +11,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# TODO 复制快照
 # TODO 动画数据路径快速选择
 
 bl_info = {

@@ -188,6 +188,47 @@ class PARAM_OT_SyncAllParamsOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PARAM_OT_CopySnapshot(bpy.types.Operator):
+    bl_idname = "param.copy_snapshot"
+    bl_label = "复制快照"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        Snapshot_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+        activite_snapshot = context.scene.paramsnap_properties.ParamSnap_properties_coll[context.scene.paramsnap_properties.ParamSnap_properties_coll_index]
+        copy_coll = Snapshot_coll.add()
+        for i in range(len(activite_snapshot.Param_properties_coll)):
+            # print(activite_snapshot.Param_properties_coll[i].name)
+            copy_param = copy_coll.Param_properties_coll.add()
+            param = activite_snapshot.Param_properties_coll[i]
+            for prop in param.bl_rna.properties:
+                id = prop.identifier
+                if id == "rna_type" or prop.is_readonly:
+                    continue
+                try:
+                    setattr(copy_param, id, getattr(param, id))
+                except Exception:
+                    pass
+            copy_coll.Param_properties_coll_index = activite_snapshot.Param_properties_coll_index
+
+        # 刷新界面
+        for area in context.screen.areas:
+            area.tag_redraw()
+        return {"FINISHED"}
+
+
+# TODO 更新存储值
+class PARAM_OT_UpdateStoredValue(bpy.types.Operator):
+    bl_idname = "param.update_stored_value"
+    bl_label = "更新存储值"
+    bl_options = {"REGISTER", "UNDO"}
+
+    ParamIndex: bpy.props.IntProperty()
+
+    def execute(self, context):
+        return {"FINISHED"}
+
+
 def register():
     bpy.utils.register_class(PARAM_OT_TestOperator)
     bpy.utils.register_class(PARAM_OT_GenericAddItem)
@@ -196,6 +237,7 @@ def register():
     bpy.utils.register_class(PARAMS_OT_AddParamToCol)
     bpy.utils.register_class(PARAM_OT_SyncParamOperator)
     bpy.utils.register_class(PARAM_OT_SyncAllParamsOperator)
+    bpy.utils.register_class(PARAM_OT_CopySnapshot)
 
 
 def unregister():
@@ -206,3 +248,4 @@ def unregister():
     bpy.utils.unregister_class(PARAMS_OT_AddParamToCol)
     bpy.utils.unregister_class(PARAM_OT_SyncParamOperator)
     bpy.utils.unregister_class(PARAM_OT_SyncAllParamsOperator)
+    bpy.utils.unregister_class(PARAM_OT_CopySnapshot)
