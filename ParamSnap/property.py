@@ -1,38 +1,21 @@
 import bpy
 from bpy.props import *
-from .utils import *
+from .i18n import translations
 
-
-def on_pointer_kind_enum_changed(self, context):
-    if self.stored_pointer_kind == "Camera":
-        self.name = "活动相机"
-        self.property_path = "bpy.context.scene.camera"
-
-
-def stored_kind_to_property_name(stored_kind, stored_pointer_kind=None):
-    mapping = {
-        "FLOAT": "stored_float",
-        "INT": "stored_int",
-        "BOOL": "stored_bool",
-        "STRING": "stored_string",
-        "VEC2": "stored_vec2",
-        "VEC3": "stored_vec3",
-        "VEC4": "stored_vec4",
-        "COLOR3": "stored_color3",
-        "COLOR4": "stored_color4",
-        "ENUM": "stored_enum",
-    }
-    if stored_kind in mapping:
-        return mapping[stored_kind]
-    elif stored_kind == "POINTER":
-        if stored_pointer_kind == "Action":
-            return "stored_action_pointer"
-        elif stored_pointer_kind == "Camera":
-            return "stored_camera_pointer"
-        else:
-            return None
-
-    return None
+types = [
+    "FLOAT",
+    "INT",
+    "BOOLEAN",
+    "STRING",
+    "VEC2",
+    "VEC3",
+    "VEC4",
+    "COLOR3",
+    "COLOR4",
+    "POINTER",
+    "UNDEFINED",
+    "NONE",
+]
 
 
 # 参数项属性
@@ -42,25 +25,11 @@ class ParamItem(bpy.types.PropertyGroup):
 
     stored_kind: EnumProperty(
         name="Stored Kind",
-        items=[
-            ("FLOAT", "Float", ""),
-            ("INT", "Int", ""),
-            ("BOOL", "Bool", ""),
-            ("STRING", "String", ""),
-            ("VEC2", "Vec2", ""),
-            ("VEC3", "Vec3", ""),
-            ("VEC4", "Vec4", ""),
-            ("COLOR3", "Color3", ""),
-            ("COLOR4", "Color4", ""),
-            ("ENUM", "Enum", ""),
-            ("IDPROP", "IDProp", ""),
-            ("POINTER", "Pointer", ""),
-            ("NONE", "None", ""),
-        ],
+        items=[(t, t, "") for t in types],
         default="NONE",
     )
 
-    stored_float: FloatProperty(default=0.0, min=0.0, max=1.0)
+    stored_float: FloatProperty(default=0.0)
     stored_int: IntProperty(default=0)
     stored_bool: BoolProperty(default=False)
     stored_string: StringProperty(default="")
@@ -72,26 +41,22 @@ class ParamItem(bpy.types.PropertyGroup):
     stored_color3: FloatVectorProperty(size=3, subtype="COLOR", min=0.0, max=1.0, default=(0.0, 0.0, 0.0))
     stored_color4: FloatVectorProperty(size=4, subtype="COLOR", min=0.0, max=1.0, default=(0.0, 0.0, 0.0, 1.0))
 
-    # ENUM 存储
-    stored_enum: StringProperty(name="Enum Value", default="")
-
     # 元数据
-    stored_json: StringProperty(default="")
-
-    show_property_path: BoolProperty(name="Show Property Path", default=False)
+    meta: StringProperty(default="{}")
 
     stored_pointer_kind: EnumProperty(
         name="stored_pointer_kind",
         items=[
             ("Action", "Action", ""),
-            ("Camera", "Camera", ""),
+            ("Object", "Object", ""),
+            ("Collection", "Collection", ""),
             ("NONE", "None", ""),
         ],
         default="NONE",
-        update=on_pointer_kind_enum_changed,
     )
     stored_action_pointer: bpy.props.PointerProperty(type=bpy.types.Action)
-    stored_camera_pointer: bpy.props.PointerProperty(type=bpy.types.Camera)
+    stored_object_pointer: bpy.props.PointerProperty(type=bpy.types.Object)
+    stored_collection_pointer: bpy.props.PointerProperty(type=bpy.types.Collection)
 
 
 # 快照项属性
@@ -105,6 +70,7 @@ class ParamSnapItem(bpy.types.PropertyGroup):
 class ParamSnapProperty(bpy.types.PropertyGroup):
     ParamSnap_properties_coll: CollectionProperty(type=ParamSnapItem)
     ParamSnap_properties_coll_index: IntProperty(name="ParamSnap Properties Index", default=0)
+    show_param_properties: BoolProperty(name="Show Param Properties", default=True)
 
 
 def register():

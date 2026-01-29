@@ -2,10 +2,7 @@ import bpy
 import re
 from bpy.app.translations import pgettext_iface as iface_
 import json
-
-
-def translations(text):
-    return bpy.app.translations.pgettext(text)
+from .property import types
 
 
 _RE_END_INT_INDEX = re.compile(r"\[(\d+)\]$")  # [0]
@@ -75,110 +72,137 @@ def resolve_ui_path(path: str):
         return None, None, -1
 
 
+def stored_kind_to_property_name(kind, ptr_kind=None):
+    if kind == "POINTER":
+        return {
+            "Action": "stored_action_pointer",
+            "Object": "stored_object_pointer",
+            "Collection": "stored_collection_pointer",
+        }.get(ptr_kind)
+    return {
+        "FLOAT": "stored_float",
+        "INT": "stored_int",
+        "BOOLEAN": "stored_bool",
+        "STRING": "stored_string",
+        "VEC2": "stored_vec2",
+        "VEC3": "stored_vec3",
+        "VEC4": "stored_vec4",
+        "COLOR3": "stored_color3",
+        "COLOR4": "stored_color4",
+        "NONE": "",
+    }.get(kind)
+
+
 def get_value_and_type_from_path(path: str):
     ptr, prop_token, index = resolve_ui_path(path)
     if ptr is None:
         return None, None, {}
-
+    val = None
+    type = "UNDEFINED"
     meta = {}
+    prop_rna = ptr.bl_rna.properties.get(prop_token)
+    if prop_rna:
+        meta["is_rna"] = "True"
+        meta["rna_type"] = prop_rna.type
+        meta["subtype"] = getattr(prop_rna, "subtype", None)
+        meta["icon"] = getattr(prop_rna, "icon", "NONE")
+        meta["array_length"] = int(getattr(prop_rna, "array_length", 0) or 0)
+        val = getattr(ptr, prop_token, None)
+        if meta["rna_type"] in types:
+            type = meta["rna_type"]
+            if meta["array_length"] == 1:
+                type = "FLOAT"
+            elif meta["array_length"] == 2:
+                type = "VEC2"
+            elif meta["array_length"] == 3:
+                type = "VEC3"
+            elif meta["array_length"] == 4:
+                type = "VEC4"
+            if meta["subtype"] == "COLOR":
+                if meta["array_length"] == 3:
+                    type = "COLOR3"
+                elif meta["array_length"] == 4:
+                    type = "COLOR4"
+            if meta["rna_type"] == "POINTER":
+                ft = getattr(prop_rna, "fixed_type", None)
+                meta["fixed_type"] = getattr(ft, "identifier", None) or getattr(ft, "name", None)
+        elif meta["rna_type"] == "ENUM":
+            type = "STRING"
+    else:
+        meta["is_rna"] = "False"
+        val = getattr(ptr, prop_token, None)
+        if val:
+            if isinstance(val, bpy.types.ID):
+                type = "POINTER"
+                meta["rna_type"] = "POINTER"
+                if isinstance(val, bpy.types.Object):
+                    meta["fixed_type"] = "Object"
+                elif isinstance(val, bpy.types.Action):
+                    meta["fixed_type"] = "Action"
+                elif isinstance(val, bpy.types.Collection):
+                    meta["fixed_type"] = "Collection"
+                else:
+                    meta["fixed_type"] = "UNKNOWN"
+            elif isinstance(val, (list, tuple)):
+                n = len(val)
+                if n == 2:
+                    type = "VEC2"
+                elif n == 3:
+                    type = "VEC3"
+                elif n == 4:
+                    type = "VEC4"
+                else:
+                    type = "UNDEFINED"
+            elif isinstance(val, bool):
+                type = "BOOLEAN"
+            elif isinstance(val, int):
+                type = "INT"
+            elif isinstance(val, float):
+                type = "FLOAT"
+            elif isinstance(val, str):
+                type = "STRING"
+    # print("val type meta", val, type, meta)
+    return val, type, meta
 
-    # -------- IDProperty --------
-    if prop_token.startswith(('["', "['")):
-        key = prop_token[2:-2]
-        v = ptr.get(key)
 
-        try:
-            ui = ptr.id_properties_ui(key).as_dict()
-            meta.update(ui)
-        except:
-            pass
-
-        meta["source"] = "IDPROP"
-
-        if isinstance(v, (list, tuple)):
-            return list(v), "ARRAY", meta
-        return v, "SCALAR", meta
-
-    # -------- RNA --------
-    rna = ptr.bl_rna.properties[prop_token]
-    meta.update(
-        {
-            "source": "RNA",
-            "rna_type": rna.type,
-            "subtype": getattr(rna, "subtype", None),
-            "is_array": getattr(rna, "is_array", False),
-            "array_length": getattr(rna, "array_length", 0),
-            "hard_min": getattr(rna, "hard_min", None),
-            "hard_max": getattr(rna, "hard_max", None),
-            "soft_min": getattr(rna, "soft_min", None),
-            "soft_max": getattr(rna, "soft_max", None),
-            "step": getattr(rna, "step", None),
-            "precision": getattr(rna, "precision", None),
-            "unit": getattr(rna, "unit", None),
-        }
-    )
-
-    v = getattr(ptr, prop_token)
-
-    if index != -1:
-        return v[index], "SCALAR", meta
-
-    if meta["is_array"]:
-        return list(v), "ARRAY", meta
-
-    return v, rna.type, meta
-
-
-def assign_stored_from_value(item, val, rna_type, meta):
-    item.stored_json = json.dumps(meta or {}, ensure_ascii=False)
-
-    # ENUM
-    if rna_type == "ENUM":
-        item.stored_kind = "ENUM"
-        item.stored_enum = str(val)
-        return
-
-    # 颜色
-    if meta.get("subtype") == "COLOR" and isinstance(val, (list, tuple)):
-        item.stored_kind = "COLOR4" if len(val) >= 4 else "COLOR3"
-        getattr(item, f"stored_color{len(val[:4])}")[:] = val[:4]
-        return
-
-    # 向量 / 数组
-    if isinstance(val, (list, tuple)):
-        n = len(val)
-        if n == 2:
-            item.stored_kind = "VEC2"
-            item.stored_vec2 = val
-        elif n == 3:
-            item.stored_kind = "VEC3"
-            item.stored_vec3 = val
-        elif n == 4:
-            item.stored_kind = "VEC4"
-            item.stored_vec4 = val
-        else:
-            item.stored_kind = "IDPROP"
-        return
-
-    # 标量
-    if isinstance(val, bool):
-        item.stored_kind = "BOOL"
-        item.stored_bool = val
-        return
-    if isinstance(val, int):
-        item.stored_kind = "INT"
-        item.stored_int = val
-        return
-    if isinstance(val, float):
+def assign_stored_from_value(item, val, type, meta):
+    item.meta = json.dumps(meta)
+    if type == "POINTER":
+        item.stored_kind = "POINTER"
+        item.stored_pointer_kind = meta["fixed_type"]
+        if meta["fixed_type"] == "Object":
+            item.stored_object_pointer = val
+        elif meta["fixed_type"] == "Action":
+            item.stored_action_pointer = val
+        elif meta["fixed_type"] == "Collection":
+            item.stored_collection_pointer = val
+    elif type == "FLOAT":
         item.stored_kind = "FLOAT"
         item.stored_float = val
-        return
-    if isinstance(val, str):
+    elif type == "INT":
+        item.stored_kind = "INT"
+        item.stored_int = val
+    elif type == "BOOLEAN":
+        item.stored_kind = "BOOLEAN"
+        item.stored_bool = val
+    elif type == "STRING":
         item.stored_kind = "STRING"
         item.stored_string = val
-        return
-
-    item.stored_kind = "IDPROP"
+    elif type == "VEC2":
+        item.stored_kind = "VEC2"
+        item.stored_vec2 = val
+    elif type == "VEC3":
+        item.stored_kind = "VEC3"
+        item.stored_vec3 = val
+    elif type == "VEC4":
+        item.stored_kind = "VEC4"
+        item.stored_vec4 = val
+    elif type == "COLOR3":
+        item.stored_kind = "COLOR3"
+        item.stored_color3 = val
+    elif type == "COLOR4":
+        item.stored_kind = "COLOR4"
+        item.stored_color4 = val
 
 
 def get_ui_name_from_path(path: str) -> str:
@@ -226,103 +250,26 @@ def get_ui_name_from_path(path: str) -> str:
 
 
 def apply_stored_to_target(param_item):
-    """
-    将 ParamItem 里 stored_* 的值写回到 param_item.property_path 指向的属性。
-    依赖你的 resolve_ui_path(path) 返回 (ptr, prop_token, index)
-    """
     ptr, prop_token, arr_index = resolve_ui_path(param_item.property_path)
-    if ptr is None or prop_token is None or arr_index is None:
-        return None
-
-    kind = param_item.stored_kind
-
-    # -------- A) IDProperty：prop_token 是 '["Socket_3"]' / "['Socket_3']" --------
-    if (prop_token.startswith('["') and prop_token.endswith('"]')) or (prop_token.startswith("['") and prop_token.endswith("']")):
-        key = prop_token[2:-2]
-
-        if kind == "FLOAT":
-            ptr[key] = float(param_item.stored_float)
-        elif kind == "INT":
-            ptr[key] = int(param_item.stored_int)
-        elif kind == "BOOL":
-            ptr[key] = bool(param_item.stored_bool)
-        elif kind == "STRING":
-            ptr[key] = str(param_item.stored_string)
-        elif kind == "ENUM":
-            # IDProperty 没有“枚举”类型，通常就是字符串
-            ptr[key] = str(param_item.stored_enum)
-        elif kind in {"VEC2", "VEC3", "VEC4"}:
-            vec = getattr(param_item, f"stored_{kind.lower()}")  # stored_vec2/3/4
-            ptr[key] = list(vec)
-        elif kind in {"COLOR3", "COLOR4"}:
-            col = param_item.stored_color3 if kind == "COLOR3" else param_item.stored_color4
-            ptr[key] = list(col)
-        else:
-            # 兜底：不建议 eval json 写回，这里先不做
-            raise ValueError(f"Unsupported stored_kind for IDProperty: {kind}")
-
+    property_name = stored_kind_to_property_name(param_item.stored_kind, param_item.stored_pointer_kind)
+    stored_val = getattr(param_item, property_name, None)
+    if stored_val is not None or param_item.stored_kind == "POINTER":
+        setattr(ptr, prop_token, stored_val)
         return True
+    return None
 
-    # -------- B) RNA 属性 --------
-    if not (hasattr(ptr, "bl_rna") and prop_token in ptr.bl_rna.properties):
-        raise ValueError(f"Not an RNA property: {prop_token}")
 
-    rna = ptr.bl_rna.properties[prop_token]
+# 定义图标对
+ICON_TOGGLES = {
+    "CHECKBOX_HLT": ("CHECKBOX_HLT_OFF", "CHECKBOX_HLT_ON"),
+    "HIDE": ("HIDE_OFF", "HIDE_ON"),
+    "RESTRICT_VIEW": ("RESTRICT_VIEW_OFF", "RESTRICT_VIEW_ON"),
+}
 
-    # 1) ENUM
-    if kind == "ENUM" or rna.type == "ENUM":
-        # Blender 枚举值是 identifier 字符串
-        setattr(ptr, prop_token, str(param_item.stored_enum))
-        return True
 
-    # 2) 标量
-    if kind == "FLOAT":
-        if arr_index != -1 and getattr(rna, "is_array", False):
-            arr = ptr.path_resolve(prop_token)
-            arr[arr_index] = float(param_item.stored_float)
-        else:
-            setattr(ptr, prop_token, float(param_item.stored_float))
-        return True
-
-    if kind == "INT":
-        if arr_index != -1 and getattr(rna, "is_array", False):
-            arr = ptr.path_resolve(prop_token)
-            arr[arr_index] = int(param_item.stored_int)
-        else:
-            setattr(ptr, prop_token, int(param_item.stored_int))
-        return True
-
-    if kind == "BOOL":
-        if arr_index != -1 and getattr(rna, "is_array", False):
-            arr = ptr.path_resolve(prop_token)
-            arr[arr_index] = bool(param_item.stored_bool)
-        else:
-            setattr(ptr, prop_token, bool(param_item.stored_bool))
-        return True
-
-    if kind == "STRING":
-        setattr(ptr, prop_token, str(param_item.stored_string))
-        return True
-
-    # 3) 向量 / 数组 / 颜色（整体写回）
-    if kind in {"VEC2", "VEC3", "VEC4"}:
-        vec = getattr(param_item, f"stored_{kind.lower()}")  # stored_vec2/3/4
-        setattr(ptr, prop_token, list(vec))
-        return True
-
-    if kind in {"COLOR3", "COLOR4"}:
-        col = param_item.stored_color3 if kind == "COLOR3" else param_item.stored_color4
-        setattr(ptr, prop_token, list(col))
-        return True
-    if kind == "POINTER":
-        if param_item.stored_pointer_kind == "Action":
-            setattr(ptr, prop_token, param_item.stored_action_pointer)
-        elif param_item.stored_pointer_kind == "Camera":
-            cam_obj = next((obj for obj in bpy.data.objects if obj.type == "CAMERA" and obj.data == param_item.stored_camera_pointer), None)
-            if cam_obj is not None:
-                setattr(ptr, prop_token, cam_obj)
-        else:
-            setattr(ptr, prop_token, None)
-        return True
-
-    raise ValueError(f"Unsupported stored_kind: {kind}")
+def get_toggle_icon(base_name, state):
+    # 如果 base_name 在映射表里，根据布尔值返回对应的
+    for key, pair in ICON_TOGGLES.items():
+        if key in base_name:
+            return pair[1] if state else pair[0]
+    return base_name  # 找不到就返回原样

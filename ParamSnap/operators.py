@@ -8,16 +8,22 @@ class PARAM_OT_TestOperator(bpy.types.Operator):
     bl_label = "测试操作"
 
     def execute(self, context):
-        print(bpy.app.translations.pgettext("Test Operator Executed"))
-
         ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
         ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
         activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 活动的快照集合
         Param_properties_coll = activite_snap.Param_properties_coll
         Param_properties_coll_index = activite_snap.Param_properties_coll_index
         activite_item = Param_properties_coll[Param_properties_coll_index]
-        val, tag, meta = get_value_and_type_from_path(activite_item.property_path)
-        print("Value:", val, "Type:", tag, "Meta:", meta)
+        path = 'bpy.data.objects["Cube"].modifiers["GeometryNodes"]["Socket_2"]'
+        path = 'bpy.data.objects["BézierCurve"].modifiers["Curve"].object'
+        path = 'bpy.data.objects["Cube.001"].modifiers["GeometryNodes"]["Socket_3"]'
+        ptr, prop_token, index = resolve_ui_path(path)
+        val = getattr(ptr, prop_token, None)
+        # icon_value = bpy.types.UILayout.icon(val) if val else 0
+        # prop_def = ptr.bl_rna.properties[prop_token]
+        # print(pointer.bl_rna.fixed_type)
+        print(type(val).__name__)
+        # print(rna)
         return {"FINISHED"}
 
 
@@ -135,10 +141,7 @@ class PARAMS_OT_AddParamToCol(bpy.types.Operator):
             area.tag_redraw()
 
         value_copy, type_tag, meta = get_value_and_type_from_path(new_item.property_path)
-        print("完整数据路径:", full_path)
-        print("Value:", value_copy, "Type:", type_tag, "Meta:", meta)
         assign_stored_from_value(new_item, value_copy, type_tag, meta)
-        print("数据类型", new_item.stored_kind, "meta:", new_item.stored_json)
         return {"FINISHED"}
 
 
