@@ -20,13 +20,14 @@ types = [
 
 # 参数项属性
 class ParamItem(bpy.types.PropertyGroup):
-    name: StringProperty(name="", default="Parameter")
-    property_path: StringProperty(name="Property Path", default="")
+    name: StringProperty(name="", default="Parameter", description="参数名称")
+    property_path: StringProperty(name="Property Path", default="", description="参数的完整数据路径")
 
     stored_kind: EnumProperty(
         name="Stored Kind",
         items=[(t, t, "") for t in types],
         default="NONE",
+        description="存储的数据类型",
     )
 
     stored_float: FloatProperty(default=0.0)
@@ -53,8 +54,10 @@ class ParamItem(bpy.types.PropertyGroup):
             ("NONE", "None", ""),
         ],
         default="NONE",
+        description="存储的指针类型",
     )
     stored_action_pointer: bpy.props.PointerProperty(type=bpy.types.Action)
+    stored_action_slots: bpy.props.StringProperty(default="")
     stored_object_pointer: bpy.props.PointerProperty(type=bpy.types.Object)
     stored_collection_pointer: bpy.props.PointerProperty(type=bpy.types.Collection)
 

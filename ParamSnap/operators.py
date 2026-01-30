@@ -22,8 +22,9 @@ class PARAM_OT_TestOperator(bpy.types.Operator):
         # icon_value = bpy.types.UILayout.icon(val) if val else 0
         # prop_def = ptr.bl_rna.properties[prop_token]
         # print(pointer.bl_rna.fixed_type)
-        print(type(val).__name__)
+        # print(type(val).__name__)
         # print(rna)
+
         return {"FINISHED"}
 
 
@@ -124,11 +125,10 @@ class PARAMS_OT_AddParamToCol(bpy.types.Operator):
         # 获取数据路径
         bpy.ops.ui.copy_data_path_button(full_path=True)
         full_path = context.window_manager.clipboard
-        # bpy.ops.ui.copy_data_path_button(full_path=False)
-        # path = context.window_manager.clipboard
-        # print("COPIED PATH:", full_path, path)
         ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
         ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+        if len(ParamSnap_properties_coll) == 0:
+            bpy.ops.param.add_item_generic(coll_path="scene.paramsnap_properties.ParamSnap_properties_coll", index_path="scene.paramsnap_properties.ParamSnap_properties_coll_index")
         activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 活动的快照集合
         Param_properties_coll = activite_snap.Param_properties_coll
         new_item = Param_properties_coll.add()
@@ -149,6 +149,7 @@ class PARAM_OT_SyncParamOperator(bpy.types.Operator):
     bl_idname = "param.sync_param"
     bl_label = "同步参数"
     bl_options = {"REGISTER", "UNDO"}
+    bl_description = "将当前值设置为存储值"
 
     ParamIndex: bpy.props.IntProperty()
 
@@ -226,6 +227,44 @@ class PARAM_OT_UpdateStoredValue(bpy.types.Operator):
     ParamIndex: bpy.props.IntProperty()
 
     def execute(self, context):
+        ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+        ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+        activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 指定的快照集合
+        param_item = activite_snap.Param_properties_coll[self.ParamIndex]  # 指定的参数项
+        prop_name = stored_kind_to_property_name(param_item.stored_kind, param_item.stored_pointer_kind)
+        val, type, meta = get_value_and_type_from_path(param_item.property_path)
+        setattr(param_item, prop_name, val)
+        return {"FINISHED"}
+
+
+class PARAM_OT_AddActionToParam(bpy.types.Operator):
+    bl_idname = "param.add_action_to_param"
+    bl_label = "Add Action to Param"
+    bl_options = {"REGISTER", "UNDO"}
+
+    name: bpy.props.StringProperty()
+    path: bpy.props.StringProperty()
+
+    def execute(self, context):
+        self.report({"INFO"}, f"Added Action to Param {self.name}, {self.path}")
+        ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+        ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+        if len(ParamSnap_properties_coll) == 0:
+            bpy.ops.param.add_item_generic(coll_path="scene.paramsnap_properties.ParamSnap_properties_coll", index_path="scene.paramsnap_properties.ParamSnap_properties_coll_index")
+        activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 活动的快照集合
+        param = activite_snap.Param_properties_coll.add()
+        param.name = self.name + "_animation"
+        param.property_path = self.path
+        param.stored_kind = "POINTER"
+        param.stored_pointer_kind = "Action"
+        val, type, meta = get_value_and_type_from_path(param.property_path)
+        setattr(param, "stored_action_pointer", val)
+        slot_val, type, meta = get_value_and_type_from_path(param.property_path.rsplit(".", 1)[0] + ".action_slot")
+        if slot_val:
+            setattr(param, "stored_action_slots", slot_val.name_display)
+        activite_snap.Param_properties_coll_index = len(activite_snap.Param_properties_coll) - 1
+        for area in context.screen.areas:
+            area.tag_redraw()
         return {"FINISHED"}
 
 
@@ -238,6 +277,8 @@ def register():
     bpy.utils.register_class(PARAM_OT_SyncParamOperator)
     bpy.utils.register_class(PARAM_OT_SyncAllParamsOperator)
     bpy.utils.register_class(PARAM_OT_CopySnapshot)
+    bpy.utils.register_class(PARAM_OT_UpdateStoredValue)
+    bpy.utils.register_class(PARAM_OT_AddActionToParam)
 
 
 def unregister():
@@ -249,3 +290,5 @@ def unregister():
     bpy.utils.unregister_class(PARAM_OT_SyncParamOperator)
     bpy.utils.unregister_class(PARAM_OT_SyncAllParamsOperator)
     bpy.utils.unregister_class(PARAM_OT_CopySnapshot)
+    bpy.utils.unregister_class(PARAM_OT_UpdateStoredValue)
+    bpy.utils.unregister_class(PARAM_OT_AddActionToParam)

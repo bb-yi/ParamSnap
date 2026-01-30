@@ -255,6 +255,17 @@ def apply_stored_to_target(param_item):
     stored_val = getattr(param_item, property_name, None)
     if stored_val is not None or param_item.stored_kind == "POINTER":
         setattr(ptr, prop_token, stored_val)
+        if param_item.stored_kind == "POINTER" and param_item.stored_pointer_kind == "Action":
+            action = getattr(ptr, prop_token)
+            slots = getattr(action, "slots", None)
+            slot = None
+            for s in slots:
+                if s.name_display == param_item.stored_action_slots:
+                    slot = s
+            if slot:
+                setattr(ptr, "action_slot", slot)
+            else:
+                return None
         return True
     return None
 
