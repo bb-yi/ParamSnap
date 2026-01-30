@@ -82,6 +82,11 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         row = layout.row(align=True)
+        col_enable = row.column(align=True)
+        enable = getattr(item, "enable", False)
+        col_enable.ui_units_x = 1.2
+        col_enable.alignment = "LEFT"
+        col_enable.prop(item, "enable", icon="HIDE_OFF" if enable else "HIDE_ON", text="", emboss=False)
 
         # ---- ① 编号（极窄） ----
         num_col = row.column(align=True)
@@ -91,13 +96,16 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
         main_split = row.split(factor=0.2, align=True)
         # ---- ② 名称 ----
         name_col = main_split.row()
+        name_col.enabled = enable
         name_col.prop(item, "name", text="", emboss=True, icon="BOOKMARKS")
         right_row = main_split.row(align=True)
+        right_row.enabled = enable
         # ---- ④ 实际属性控件 ----
         if item.property_path:
             self.show_prop_path(right_row, item)
         self.show_stored(right_row, item)
         sync_row = right_row.row(align=True)
+        sync_row.enabled = enable
         op = sync_row.operator("param.sync_param", text="", icon="FILE_REFRESH")
         op.ParamIndex = index
         op = sync_row.operator("param.update_stored_value", text="", icon="ANIM")
@@ -121,6 +129,7 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
 
         col = layout.column(align=True)
         col.operator("param.test_operator", text="测试操作")
+        # col.operator("param.swap_all_param", text="交换所有参数", icon="UV_SYNC_SELECT")
 
         col = layout.column()
         row = col.row(align=True)
@@ -146,10 +155,31 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
         op.coll_path = coll_path
         op.index_path = index_path
         op.direction = "DOWN"
+        col1.separator()
+        col1.operator("param.copy_snapshot", text="", icon="COPYDOWN")
 
         row = col.row(align=True)
         if len(scene.paramsnap_properties.ParamSnap_properties_coll) != 0:
-            col.label(text=translations("|参数列表|------|参数名称|-------|当前值|------|存储值|------|同步选中参数|"))
+            ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+            ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+            activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]
+            row_tile = col.row(align=True)
+            row_tile_left = row_tile.split(factor=0.8, align=True)
+            row_tile_left_1 = row_tile_left.row(align=True)
+            row_tile_left_2 = row_tile_left_1.row(align=True)
+            row_tile_left_2.scale_x = 0.25
+            row_tile_left_2.label(text="")
+            # row_tile_left_1.prop(activite_snap, "switch_enable", text="", emboss=False, icon="HIDE_OFF" if activite_snap.switch_enable else "HIDE_ON")
+            row_tile_left_1.operator("param.inver_enable", text="", icon="ARROW_LEFTRIGHT", emboss=False)
+            row_tile_left_1.label(text="|参数名称|")
+            row_tile_left_1.label(text="|当前值|")
+            row_tile_left_1.label(text="|存储值|")
+            # row_tile_left_1.label(text="|同步选中参数|")
+            row_tile_left.label(text="|同步|")
+            row_tile_left.label(text="|更新|")
+            row_tile_left.label(text="|交换|")
+
+            # col.label(text=translations("|参数列表|------|参数名称|-------|当前值|------|存储值|------|同步选中参数|"))
             row = col.row(align=True)
             row.template_list(
                 "PARAMS_UL_ParamList",
@@ -183,6 +213,17 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
             op.coll_path = coll_path
             op.index_path = index_path
             op.direction = "DOWN"
+
+            col1.separator()
+
+            op = col1.operator("param.move_item_to_end_generic", text="", icon="TRIA_UP_BAR")
+            op.coll_path = coll_path
+            op.index_path = index_path
+            op.where = "TOP"
+            op = col1.operator("param.move_item_to_end_generic", text="", icon="TRIA_DOWN_BAR")
+            op.coll_path = coll_path
+            op.index_path = index_path
+            op.where = "BOTTOM"
         col = layout.column(align=True)
         if len(scene.paramsnap_properties.ParamSnap_properties_coll) != 0:
             col.prop(scene.paramsnap_properties, "show_param_properties", text="显示参数信息", icon="TRIA_DOWN" if scene.paramsnap_properties.show_param_properties else "TRIA_RIGHT")
@@ -192,12 +233,16 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
                 if len(activite_Snap.Param_properties_coll) > 0:
                     activite_params = activite_Snap.Param_properties_coll[activite_Snap.Param_properties_coll_index]
                     box = col.box()
+                    box.prop(activite_params, "enable", text="启用", icon="HIDE_OFF" if activite_params.enable else "HIDE_ON", emboss=True)
+                    box = col.box()
+                    box.enabled = activite_params.enable
                     box.prop(activite_params, "name", text="参数名称")
-                    row = box.row()
                     valid_path = resolve_ui_path(activite_params.property_path)[0]
+                    row = box.row()
                     row.alert = not valid_path
                     row.prop(activite_params, "property_path", text="属性路径")
-                    box.prop(activite_params, "meta", text="元数据")
+                    if 0:
+                        box.prop(activite_params, "meta", text="元数据")
                     box.prop(activite_params, "stored_kind", text="数据类型")
                     if activite_params.stored_kind == "POINTER":
                         box.prop(activite_params, "stored_pointer_kind", text="指针类型")
@@ -216,7 +261,12 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
 
         col = layout.column(align=True)
         col.scale_y = 2.0
-        col.operator("param.sync_all_params", text="同步所有参数", icon="FILE_REFRESH")
+        row = col.row(align=True)
+        main_split = row.split(factor=0.8, align=True)
+        main_split.operator("param.sync_all_params", text="同步所有参数", icon="FILE_REFRESH")
+        main_split.operator("param.update_all_stored_value", text="更新所有存储值", icon="ANIM")
+        main_split.operator("param.swap_all_param", text="交换所有参数", icon="UV_SYNC_SELECT")
+
         col = layout.column()
         col.operator("param.copy_snapshot", text="复制快照", icon="COPYDOWN")
 

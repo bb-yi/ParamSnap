@@ -32,6 +32,7 @@ class PARAM_OT_GenericAddItem(bpy.types.Operator):
     bl_idname = "param.add_item_generic"
     bl_label = "Add Item"
     bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Add Item"
 
     # 定义接收路径的参数
     coll_path: bpy.props.StringProperty()
@@ -58,6 +59,7 @@ class PARAM_OT_GenericRemoveItem(bpy.types.Operator):
     bl_idname = "param.remove_item_generic"
     bl_label = "Remove Item"
     bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Remove Item"
 
     coll_path: bpy.props.StringProperty()
     index_path: bpy.props.StringProperty()
@@ -88,6 +90,7 @@ class PARAM_OT_GenericMoveItem(bpy.types.Operator):
     bl_idname = "param.move_item_generic"
     bl_label = "Move Item"
     bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Move Item"
 
     coll_path: bpy.props.StringProperty()
     index_path: bpy.props.StringProperty()
@@ -116,10 +119,60 @@ class PARAM_OT_GenericMoveItem(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class PARAM_OT_GenericMoveItemToEnd(bpy.types.Operator):
+    bl_idname = "param.move_item_to_end_generic"
+    bl_label = "Move Item To End"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Move Item To End"
+
+    coll_path: bpy.props.StringProperty()
+    index_path: bpy.props.StringProperty()
+
+    # 移动到最顶端还是最底端
+    where: bpy.props.EnumProperty(
+        items=[
+            ("TOP", "Top", "Move to the first position"),
+            ("BOTTOM", "Bottom", "Move to the last position"),
+        ],
+        default="TOP",
+    )
+
+    def execute(self, context):
+        try:
+            coll = context.path_resolve(self.coll_path)
+
+            path_parts = self.index_path.rsplit(".", 1)
+            target_data = context.path_resolve(path_parts[0])
+            prop_name = path_parts[1]
+            idx = getattr(target_data, prop_name)
+
+            n = len(coll)
+            if n <= 1:
+                return {"CANCELLED"}
+
+            # 目标位置
+            new_idx = 0 if self.where == "TOP" else (n - 1)
+
+            # 如果已经在目标位置，直接结束
+            if idx == new_idx:
+                return {"FINISHED"}
+
+            # move(from, to)
+            coll.move(idx, new_idx)
+            setattr(target_data, prop_name, new_idx)
+
+            return {"FINISHED"}
+
+        except Exception as e:
+            self.report({"ERROR"}, f"Move Error: {str(e)}")
+            return {"CANCELLED"}
+
+
 class PARAMS_OT_AddParamToCol(bpy.types.Operator):
     bl_idname = "param.add_param_to_col"
     bl_label = "Add Param to Col"
     bl_options = {"REGISTER", "UNDO"}
+    bl_description = "添加参数到活动的快照"
 
     def execute(self, context):
         # 获取数据路径
@@ -131,17 +184,26 @@ class PARAMS_OT_AddParamToCol(bpy.types.Operator):
             bpy.ops.param.add_item_generic(coll_path="scene.paramsnap_properties.ParamSnap_properties_coll", index_path="scene.paramsnap_properties.ParamSnap_properties_coll_index")
         activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 活动的快照集合
         Param_properties_coll = activite_snap.Param_properties_coll
-        new_item = Param_properties_coll.add()
-        new_item.name = get_ui_name_from_path(full_path)
-        new_item.property_path = full_path
-        activite_snap.Param_properties_coll_index = len(Param_properties_coll) - 1
+        new_item = None
+        has = False
+        for i in range(len(Param_properties_coll)):
+            if Param_properties_coll[i].property_path == full_path:
+                new_item = Param_properties_coll[i]
+                has = True
+                activite_snap.Param_properties_coll_index = i
+                print("参数已存在")
+                break
+        if not has:
+            new_item = Param_properties_coll.add()
+            new_item.name = get_ui_name_from_path(full_path)
+            new_item.property_path = full_path
+            activite_snap.Param_properties_coll_index = len(Param_properties_coll) - 1
+        value_copy, type_tag, meta = get_value_and_type_from_path(new_item.property_path)
+        assign_stored_from_value(new_item, value_copy, type_tag, meta)
         self.report({"INFO"}, f"Added Parameter to ParamSnap {new_item.name}")
         # 刷新界面
         for area in context.screen.areas:
             area.tag_redraw()
-
-        value_copy, type_tag, meta = get_value_and_type_from_path(new_item.property_path)
-        assign_stored_from_value(new_item, value_copy, type_tag, meta)
         return {"FINISHED"}
 
 
@@ -181,6 +243,9 @@ class PARAM_OT_SyncAllParamsOperator(bpy.types.Operator):
     def execute(self, context):
         coll = context.scene.paramsnap_properties.ParamSnap_properties_coll[context.scene.paramsnap_properties.ParamSnap_properties_coll_index]
         for i in range(len(coll.Param_properties_coll)):
+            enable = coll.Param_properties_coll[i].enable
+            if not enable:
+                continue
             try:
                 bpy.ops.param.sync_param(ParamIndex=i)
             except Exception as e:
@@ -214,6 +279,7 @@ class PARAM_OT_CopySnapshot(bpy.types.Operator):
                     print(f"复制快照{param.name}失败: {e}")
                     pass
             copy_coll.Param_properties_coll_index = activite_snapshot.Param_properties_coll_index
+        context.scene.paramsnap_properties.ParamSnap_properties_coll_index = len(Snapshot_coll) - 1
 
         # 刷新界面
         for area in context.screen.areas:
@@ -242,6 +308,27 @@ class PARAM_OT_UpdateStoredValue(bpy.types.Operator):
             slot_val, type, meta = get_value_and_type_from_path(param_item.property_path.rsplit(".", 1)[0] + ".action_slot")
             if slot_val:
                 setattr(param_item, "stored_action_slots", slot_val.name_display)
+        return {"FINISHED"}
+
+
+class PARAM_OT_UpdateAllStoredValue(bpy.types.Operator):
+    bl_idname = "param.update_all_stored_value"
+    bl_label = "更新所有存储值"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        coll = context.scene.paramsnap_properties.ParamSnap_properties_coll[context.scene.paramsnap_properties.ParamSnap_properties_coll_index]
+        for i in range(len(coll.Param_properties_coll)):
+            enable = coll.Param_properties_coll[i].enable
+            if not enable:
+                continue
+            try:
+                bpy.ops.param.update_stored_value(ParamIndex=i)
+            except Exception as e:
+                self.report({"ERROR"}, f"{e}")
+        # 刷新界面
+        for area in context.screen.areas:
+            area.tag_redraw()
         return {"FINISHED"}
 
 
@@ -297,6 +384,28 @@ class PARAM_OT_SwapParam(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PARAM_OT_SwapAllParam(bpy.types.Operator):
+    bl_idname = "param.swap_all_param"
+    bl_label = "交换所有参数"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "交换所有参数"
+
+    def execute(self, context):
+        coll = context.scene.paramsnap_properties.ParamSnap_properties_coll[context.scene.paramsnap_properties.ParamSnap_properties_coll_index]
+        for i in range(len(coll.Param_properties_coll)):
+            enable = coll.Param_properties_coll[i].enable
+            if not enable:
+                continue
+            try:
+                bpy.ops.param.swap_param(ParamIndex=i)
+            except Exception as e:
+                self.report({"ERROR"}, f"{e}")
+        # 刷新界面
+        for area in context.screen.areas:
+            area.tag_redraw()
+        return {"FINISHED"}
+
+
 class PARAM_OT_AddActionToParam(bpy.types.Operator):
     bl_idname = "param.add_action_to_param"
     bl_label = "Add Action to Param"
@@ -312,45 +421,75 @@ class PARAM_OT_AddActionToParam(bpy.types.Operator):
         if len(ParamSnap_properties_coll) == 0:
             bpy.ops.param.add_item_generic(coll_path="scene.paramsnap_properties.ParamSnap_properties_coll", index_path="scene.paramsnap_properties.ParamSnap_properties_coll_index")
         activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 活动的快照集合
-        param = activite_snap.Param_properties_coll.add()
-        param.name = self.name + "_animation"
-        param.property_path = self.path
-        param.stored_kind = "POINTER"
-        param.stored_pointer_kind = "Action"
+        snap_coll = activite_snap.Param_properties_coll
+        param = None
+        has = False
+        for i in range(len(snap_coll)):
+            if snap_coll[i].property_path == self.path:
+                param = snap_coll[i]
+                has = True
+                activite_snap.Param_properties_coll_index = i
+                print("参数已存在")
+                break
+        if not has:
+            param = snap_coll.add()
+            param.name = self.name + "_animation"
+            param.property_path = self.path
+            param.stored_kind = "POINTER"
+            param.stored_pointer_kind = "Action"
+            activite_snap.Param_properties_coll_index = len(snap_coll) - 1
         val, type, meta = get_value_and_type_from_path(param.property_path)
         setattr(param, "stored_action_pointer", val)
         slot_val, type, meta = get_value_and_type_from_path(param.property_path.rsplit(".", 1)[0] + ".action_slot")
         if slot_val:
             setattr(param, "stored_action_slots", slot_val.name_display)
-        activite_snap.Param_properties_coll_index = len(activite_snap.Param_properties_coll) - 1
+
         for area in context.screen.areas:
             area.tag_redraw()
         return {"FINISHED"}
 
 
+class PARAM_OT_InverEnable(bpy.types.Operator):
+    bl_idname = "param.inver_enable"
+    bl_label = "Invert Enable"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Invert Enable"
+
+    def execute(self, context):
+        ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+        ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+        activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]
+        for i in range(len(activite_snap.Param_properties_coll)):
+            activite_snap.Param_properties_coll[i].enable = not activite_snap.Param_properties_coll[i].enable
+        for area in context.screen.areas:
+            area.tag_redraw()
+        return {"FINISHED"}
+
+
+classes = [
+    PARAM_OT_TestOperator,
+    PARAM_OT_GenericAddItem,
+    PARAM_OT_GenericRemoveItem,
+    PARAM_OT_GenericMoveItem,
+    PARAM_OT_GenericMoveItemToEnd,
+    PARAMS_OT_AddParamToCol,
+    PARAM_OT_SyncParamOperator,
+    PARAM_OT_SyncAllParamsOperator,
+    PARAM_OT_CopySnapshot,
+    PARAM_OT_UpdateStoredValue,
+    PARAM_OT_UpdateAllStoredValue,
+    PARAM_OT_AddActionToParam,
+    PARAM_OT_SwapParam,
+    PARAM_OT_SwapAllParam,
+    PARAM_OT_InverEnable,
+]
+
+
 def register():
-    bpy.utils.register_class(PARAM_OT_TestOperator)
-    bpy.utils.register_class(PARAM_OT_GenericAddItem)
-    bpy.utils.register_class(PARAM_OT_GenericRemoveItem)
-    bpy.utils.register_class(PARAM_OT_GenericMoveItem)
-    bpy.utils.register_class(PARAMS_OT_AddParamToCol)
-    bpy.utils.register_class(PARAM_OT_SyncParamOperator)
-    bpy.utils.register_class(PARAM_OT_SyncAllParamsOperator)
-    bpy.utils.register_class(PARAM_OT_CopySnapshot)
-    bpy.utils.register_class(PARAM_OT_UpdateStoredValue)
-    bpy.utils.register_class(PARAM_OT_AddActionToParam)
-    bpy.utils.register_class(PARAM_OT_SwapParam)
+    for cls in classes:
+        bpy.utils.register_class(cls)
 
 
 def unregister():
-    bpy.utils.unregister_class(PARAM_OT_TestOperator)
-    bpy.utils.unregister_class(PARAM_OT_GenericAddItem)
-    bpy.utils.unregister_class(PARAM_OT_GenericRemoveItem)
-    bpy.utils.unregister_class(PARAM_OT_GenericMoveItem)
-    bpy.utils.unregister_class(PARAMS_OT_AddParamToCol)
-    bpy.utils.unregister_class(PARAM_OT_SyncParamOperator)
-    bpy.utils.unregister_class(PARAM_OT_SyncAllParamsOperator)
-    bpy.utils.unregister_class(PARAM_OT_CopySnapshot)
-    bpy.utils.unregister_class(PARAM_OT_UpdateStoredValue)
-    bpy.utils.unregister_class(PARAM_OT_AddActionToParam)
-    bpy.utils.unregister_class(PARAM_OT_SwapParam)
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)

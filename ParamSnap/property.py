@@ -20,6 +20,7 @@ types = [
 
 # 参数项属性
 class ParamItem(bpy.types.PropertyGroup):
+    enable: BoolProperty(name="enable", default=True)
     name: StringProperty(name="", default="Parameter", description="参数名称")
     property_path: StringProperty(name="Property Path", default="", description="参数的完整数据路径")
 
@@ -62,11 +63,22 @@ class ParamItem(bpy.types.PropertyGroup):
     stored_collection_pointer: bpy.props.PointerProperty(type=bpy.types.Collection)
 
 
+def switch_enable_update(self, context):
+    ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+    ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+    activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]
+    for i in range(len(activite_snap.Param_properties_coll)):
+        activite_snap.Param_properties_coll[i].enable = self.switch_enable
+    for area in context.screen.areas:
+        area.tag_redraw()
+
+
 # 快照项属性
 class ParamSnapItem(bpy.types.PropertyGroup):
     name: StringProperty(name="", default=translations("Snapshot"))
     Param_properties_coll: CollectionProperty(type=ParamItem)
     Param_properties_coll_index: IntProperty(name="Param Properties Index", default=0)
+    switch_enable: BoolProperty(name="Switch Enable", default=True, update=switch_enable_update)
 
 
 # 插件属性组
