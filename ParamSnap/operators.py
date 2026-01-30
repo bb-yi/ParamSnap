@@ -135,7 +135,7 @@ class PARAMS_OT_AddParamToCol(bpy.types.Operator):
         new_item.name = get_ui_name_from_path(full_path)
         new_item.property_path = full_path
         activite_snap.Param_properties_coll_index = len(Param_properties_coll) - 1
-        self.report({"INFO"}, f"Added Parameter to Collection {full_path}")
+        self.report({"INFO"}, f"Added Parameter to ParamSnap {new_item.name}")
         # 刷新界面
         for area in context.screen.areas:
             area.tag_redraw()
@@ -162,6 +162,8 @@ class PARAM_OT_SyncParamOperator(bpy.types.Operator):
             flag = apply_stored_to_target(param_item)
             if flag == None:
                 self.report({"ERROR"}, f"同步失败: {param_item.name}")
+            elif flag == 2:
+                self.report({"WARNING"}, f"动作槽为空: {param_item.name}")
             # 立即刷新视图
             for area in context.screen.areas:
                 area.tag_redraw()
@@ -208,7 +210,8 @@ class PARAM_OT_CopySnapshot(bpy.types.Operator):
                     continue
                 try:
                     setattr(copy_param, id, getattr(param, id))
-                except Exception:
+                except Exception as e:
+                    print(f"复制快照{param.name}失败: {e}")
                     pass
             copy_coll.Param_properties_coll_index = activite_snapshot.Param_properties_coll_index
 
@@ -223,6 +226,7 @@ class PARAM_OT_UpdateStoredValue(bpy.types.Operator):
     bl_idname = "param.update_stored_value"
     bl_label = "更新存储值"
     bl_options = {"REGISTER", "UNDO"}
+    bl_description = "将当前值设置为存储值"
 
     ParamIndex: bpy.props.IntProperty()
 
@@ -234,6 +238,62 @@ class PARAM_OT_UpdateStoredValue(bpy.types.Operator):
         prop_name = stored_kind_to_property_name(param_item.stored_kind, param_item.stored_pointer_kind)
         val, type, meta = get_value_and_type_from_path(param_item.property_path)
         setattr(param_item, prop_name, val)
+        if param_item.stored_kind == "POINTER" and param_item.stored_pointer_kind == "Action":
+            slot_val, type, meta = get_value_and_type_from_path(param_item.property_path.rsplit(".", 1)[0] + ".action_slot")
+            if slot_val:
+                setattr(param_item, "stored_action_slots", slot_val.name_display)
+        return {"FINISHED"}
+
+
+class PARAM_OT_SwapParam(bpy.types.Operator):
+    bl_idname = "param.swap_param"
+    bl_label = "交换参数"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "交换当前值和存储值"
+
+    ParamIndex: bpy.props.IntProperty()
+
+    def execute(self, context):
+        ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
+        ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
+        activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 指定的快照集合
+        param_item = activite_snap.Param_properties_coll[self.ParamIndex]  # 指定的参数项
+        ptr, prop_token, index = resolve_ui_path(param_item.property_path)
+        current_val = getattr(ptr, prop_token, None)
+        if isinstance(current_val, bpy.types.ID):
+            current_val = current_val  # 指针类型先保持（你后面 assign_stored_from_value 会处理）
+        elif hasattr(current_val, "__len__") and not isinstance(current_val, (str, bytes, bytearray)):
+            current_val = tuple(current_val)  # vec/color/array 冻结成 tuple
+        # print(f"当前值: {(current_val)},存储值: {(get_param_stored_val(param_item))}")
+        slot_name = None
+        if param_item.stored_kind == "POINTER" and param_item.stored_pointer_kind == "Action":
+            slot_val, type, meta = get_value_and_type_from_path(param_item.property_path.rsplit(".", 1)[0] + ".action_slot")
+            if slot_val:
+                slot_name = slot_val.name_display
+
+        flag = apply_stored_to_target(param_item)
+        meta = json.loads(param_item.meta)
+        if param_item.stored_kind == "POINTER":
+            meta["fixed_type"] = param_item.stored_pointer_kind
+        # print("meta:", meta)
+        # print(f"111当前值: {(current_val)},存储值: {(get_param_stored_val(param_item))}")
+        assign_stored_from_value(param_item, current_val, param_item.stored_kind, meta)
+        if param_item.stored_kind == "POINTER" and param_item.stored_pointer_kind == "Action":
+            if not slot_name:
+                slot_name = ""
+            setattr(param_item, "stored_action_slots", slot_name)
+        if flag == None:
+            self.report({"ERROR"}, f"同步失败: {param_item.name}")
+        elif flag == 2:
+            self.report({"WARNING"}, f"动作槽为空: {param_item.name}")
+        # 立即刷新视图
+        for area in context.screen.areas:
+            area.tag_redraw()
+        try:
+            pass
+        except Exception as e:
+            print(f"交换参数{param_item.name}失败: {e}")
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -279,6 +339,7 @@ def register():
     bpy.utils.register_class(PARAM_OT_CopySnapshot)
     bpy.utils.register_class(PARAM_OT_UpdateStoredValue)
     bpy.utils.register_class(PARAM_OT_AddActionToParam)
+    bpy.utils.register_class(PARAM_OT_SwapParam)
 
 
 def unregister():
@@ -292,3 +353,4 @@ def unregister():
     bpy.utils.unregister_class(PARAM_OT_CopySnapshot)
     bpy.utils.unregister_class(PARAM_OT_UpdateStoredValue)
     bpy.utils.unregister_class(PARAM_OT_AddActionToParam)
+    bpy.utils.unregister_class(PARAM_OT_SwapParam)

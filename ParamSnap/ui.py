@@ -38,7 +38,7 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
         row = row.row()
         row.prop(item, prop_name, icon=icon, text=text)
         if item.stored_kind == "POINTER" and item.stored_pointer_kind == "Action":
-            row.prop(item, "stored_action_slots", text=text)
+            row.prop(item, "stored_action_slots", text="动作槽")
         return getattr(item, prop_name, None)
 
     def show_prop_path(self, row, item, text=""):
@@ -72,7 +72,7 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
                                 text = "当前的值"
                             val_row.prop(obj, prop_token, text=text)
                             if item.stored_kind == "POINTER" and item.stored_pointer_kind == "Action":
-                                val_row.prop(obj, "action_slot", text=text)
+                                val_row.prop(obj, "action_slot", text="动作槽")
         except Exception as e:
             row = row.row()
             row.label(text=text)
@@ -99,6 +99,10 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
         self.show_stored(right_row, item)
         sync_row = right_row.row(align=True)
         op = sync_row.operator("param.sync_param", text="", icon="FILE_REFRESH")
+        op.ParamIndex = index
+        op = sync_row.operator("param.update_stored_value", text="", icon="ANIM")
+        op.ParamIndex = index
+        op = sync_row.operator("param.swap_param", text="", icon="UV_SYNC_SELECT")
         op.ParamIndex = index
 
 
@@ -193,16 +197,21 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
                     valid_path = resolve_ui_path(activite_params.property_path)[0]
                     row.alert = not valid_path
                     row.prop(activite_params, "property_path", text="属性路径")
+                    box.prop(activite_params, "meta", text="元数据")
                     box.prop(activite_params, "stored_kind", text="数据类型")
                     if activite_params.stored_kind == "POINTER":
                         box.prop(activite_params, "stored_pointer_kind", text="指针类型")
-                    row = box.row()
-                    PARAMS_UL_ParamList.show_prop_path(self, row, activite_params, "当前的值")
-                    row = box.row()
-                    PARAMS_UL_ParamList.show_stored(self, row, activite_params, "存储的值")
-                    col = box.column()
-                    col.prop(activite_params, "meta", text="元数据")
+                    val_box = box.box()
+                    col = val_box.column(align=True)
+                    PARAMS_UL_ParamList.show_prop_path(self, col, activite_params, "当前的值")
+                    PARAMS_UL_ParamList.show_stored(self, col, activite_params, "存储的值")
+                    col = box.column(align=True)
+                    # col.prop(activite_params, "meta", text="元数据")
                     op = col.operator("param.sync_param", text="同步当前参数", icon="FILE_REFRESH")
+                    op.ParamIndex = activite_Snap.Param_properties_coll_index
+                    op = col.operator("param.update_stored_value", text="更新存储值", icon="ANIM")
+                    op.ParamIndex = activite_Snap.Param_properties_coll_index
+                    op = col.operator("param.swap_param", text="交换参数", icon="UV_SYNC_SELECT")
                     op.ParamIndex = activite_Snap.Param_properties_coll_index
 
         col = layout.column(align=True)
@@ -220,7 +229,6 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
 def draw_property_context_menu(self, context):
     layout = self.layout
 
-    # 检查当前是否点击了有效的属性
     prop = getattr(context, "button_prop", None)
     ptr = getattr(context, "button_pointer", None)
     # index = getattr(context, "button_index", -1)  # 获取点击的维度，如 X 轴
@@ -232,20 +240,14 @@ def draw_property_context_menu(self, context):
     #     layout.label(text="请选择属性", icon="ERROR")
 
 
-# 哪些 tab 我们关心，以及它们该返回什么 target_id
+# 从活动属性面板获取数据块
 def _resolve_target_id_from_properties(context):
     space = context.space_data
     tab = space.context if (space and space.type == "PROPERTIES") else ""
-
-    # 1) 先处理 Pin（最重要）
     pinned = None
     if space and space.type == "PROPERTIES" and getattr(space, "use_pin_id", False):
         pinned = space.pin_id  # 可能是 Object / Material / Mesh / Scene / World ...
-
-    # 2) 再根据 tab 选择“真正要挂 action 的 ID”
     base = pinned
-
-    # 没 pin 时，base 从当前上下文补
     if base is None:
         if tab == "SCENE":
             base = context.scene
@@ -255,77 +257,54 @@ def _resolve_target_id_from_properties(context):
             base = context.material or (context.active_object.active_material if context.active_object else None)
         else:
             base = context.active_object
-
-    # 3) tab 分发成最终 target_id
     if tab == "OBJECT":
-        # 目标是 Object（骨骼动画也挂在 Armature Object 上）
         return base if isinstance(base, bpy.types.Object) else context.active_object
-
     if tab == "DATA":
-        # 数据属性：如果 base 是 Object，就返回它的 data；如果本身就是 Mesh/Curve/... 就直接返回
         if isinstance(base, bpy.types.Object):
             return base.data
         return base
-
     if tab == "MATERIAL":
-        # 材质属性：pin 了材质就用材质；pin 了物体就用它 active_material
         if isinstance(base, bpy.types.Material):
             return base
         if isinstance(base, bpy.types.Object):
             return base.active_material
         return context.material
-
     if tab == "SCENE":
         return base if isinstance(base, bpy.types.Scene) else context.scene
-
     if tab == "WORLD":
         if isinstance(base, bpy.types.World):
             return base
         return context.scene.world if context.scene else None
-
-    # 其它 tab 先返回 base（你也可以扩展）
     return base
 
 
+# 数据块转数据路径
 def id_to_bpy_data_path(id_block):
     """返回类似 bpy.data.objects["Cube"] / bpy.data.materials["Mat"] 的路径字符串"""
     if not isinstance(id_block, bpy.types.ID):
         return None
-
     name = id_block.name.replace('"', '\\"')
-
-    # 用指针比对最可靠
     try:
         ptr = id_block.as_pointer()
     except Exception:
         ptr = None
-
-    # 扫描 bpy.data 的所有集合（objects/meshes/materials/actions/...)
     for attr in dir(bpy.data):
         col = getattr(bpy.data, attr, None)
         if col is None:
             continue
-
-        # bpy.data.xxx 通常是 bpy_prop_collection：有 get()/keys()
         if not hasattr(col, "get"):
             continue
-
         try:
             item = col.get(id_block.name)
         except Exception:
             continue
-
         if not item:
             continue
-
-        # 可能同名但不同实例，用指针确认
         try:
             if ptr is None or item.as_pointer() == ptr:
                 return f'bpy.data.{attr}["{name}"]'
         except Exception:
-            # 某些类型可能没 as_pointer，但一般 ID 都有；这里兜底：直接按名字认为匹配
             return f'bpy.data.{attr}["{name}"]'
-
     return None
 
 
@@ -334,7 +313,7 @@ def get_action_full_path(id_block):
     return (base + ".animation_data.action") if base else None
 
 
-# 1) 改 draw 函数签名：多一个 panel_name
+# 添加到动画面板的部分
 def sna_add_to_action_panel(self, context, panel_name):
     layout = self.layout
     # layout.label(text=panel_name)
@@ -344,7 +323,7 @@ def sna_add_to_action_panel(self, context, panel_name):
     path = base + ".animation_data.action"
 
     op = layout.operator("param.add_action_to_param", text="添加到活动快照", icon="INDIRECT_ONLY_ON")
-    op.name = id_block.name + "animation"
+    op.name = id_block.name
     op.path = path
 
     if panel_name == "MATERIAL_PT_animation":

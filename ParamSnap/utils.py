@@ -166,7 +166,7 @@ def get_value_and_type_from_path(path: str):
 
 
 def assign_stored_from_value(item, val, type, meta):
-    item.meta = json.dumps(meta)
+    item.meta = json.dumps(meta)  # 转成字符串存入
     if type == "POINTER":
         item.stored_kind = "POINTER"
         item.stored_pointer_kind = meta["fixed_type"]
@@ -203,6 +203,36 @@ def assign_stored_from_value(item, val, type, meta):
     elif type == "COLOR4":
         item.stored_kind = "COLOR4"
         item.stored_color4 = val
+
+
+def get_param_stored_val(item):
+    val = None
+    if item.stored_kind == "POINTER":
+        if item.stored_pointer_kind == "Object":
+            val = item.stored_object_pointer
+        elif item.stored_pointer_kind == "Action":
+            val = item.stored_action_pointer
+        elif item.stored_pointer_kind == "Collection":
+            val = item.stored_collection_pointer
+    elif item.stored_kind == "FLOAT":
+        val = item.stored_float
+    elif item.stored_kind == "INT":
+        val = item.stored_int
+    elif item.stored_kind == "BOOLEAN":
+        val = item.stored_bool
+    elif item.stored_kind == "STRING":
+        val = item.stored_string
+    elif item.stored_kind == "VEC2":
+        val = item.stored_vec2
+    elif item.stored_kind == "VEC3":
+        val = item.stored_vec3
+    elif item.stored_kind == "VEC4":
+        val = item.stored_vec4
+    elif item.stored_kind == "COLOR3":
+        val = item.stored_color3
+    elif item.stored_kind == "COLOR4":
+        val = item.stored_color4
+    return val
 
 
 def get_ui_name_from_path(path: str) -> str:
@@ -258,6 +288,8 @@ def apply_stored_to_target(param_item):
         if param_item.stored_kind == "POINTER" and param_item.stored_pointer_kind == "Action":
             action = getattr(ptr, prop_token)
             slots = getattr(action, "slots", None)
+            if not slots:
+                return 2
             slot = None
             for s in slots:
                 if s.name_display == param_item.stored_action_slots:
@@ -265,8 +297,9 @@ def apply_stored_to_target(param_item):
             if slot:
                 setattr(ptr, "action_slot", slot)
             else:
-                return None
-        return True
+                print("动作槽设置失败")
+                return 2
+        return 1
     return None
 
 
