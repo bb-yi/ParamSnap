@@ -440,6 +440,7 @@ PT_animation = {
 }
 
 _PT_wrapped_draw = {}
+_BUTTON_CONTEXT_MENU_CLS = None
 
 
 def register_animation_panels():
@@ -467,17 +468,37 @@ def unregister_animation_panels():
     _PT_wrapped_draw.clear()
 
 
+def _resolve_button_context_menu_cls():
+    for menu_name in ("UI_MT_button_context_menu", "WM_MT_button_context"):
+        menu_cls = getattr(bpy.types, menu_name, None)
+        if menu_cls is not None:
+            return menu_cls
+    return None
+
+
 def register():
+    global _BUTTON_CONTEXT_MENU_CLS
     bpy.utils.register_class(PARAMS_UL_SnapshotList)
     bpy.utils.register_class(PARAMS_UL_ParamList)
     bpy.utils.register_class(VIEW3D_PT_ParamSnapPanel)
-    bpy.types.WM_MT_button_context.append(draw_property_context_menu)
+    _BUTTON_CONTEXT_MENU_CLS = _resolve_button_context_menu_cls()
+    if _BUTTON_CONTEXT_MENU_CLS is not None:
+        _BUTTON_CONTEXT_MENU_CLS.append(draw_property_context_menu)
+    else:
+        print("ParamSnap: button context menu type not found, skip context menu registration")
     register_animation_panels()
 
 
 def unregister():
+    global _BUTTON_CONTEXT_MENU_CLS
     bpy.utils.unregister_class(PARAMS_UL_SnapshotList)
     bpy.utils.unregister_class(PARAMS_UL_ParamList)
     bpy.utils.unregister_class(VIEW3D_PT_ParamSnapPanel)
-    bpy.types.WM_MT_button_context.remove(draw_property_context_menu)
+    menu_cls = _BUTTON_CONTEXT_MENU_CLS or _resolve_button_context_menu_cls()
+    if menu_cls is not None:
+        try:
+            menu_cls.remove(draw_property_context_menu)
+        except ValueError:
+            pass
+    _BUTTON_CONTEXT_MENU_CLS = None
     unregister_animation_panels()
