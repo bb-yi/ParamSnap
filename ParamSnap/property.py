@@ -18,17 +18,29 @@ types = [
 ]
 
 
+def property_path_update(self, context):
+    try:
+        from .utils import rebuild_param_target_reference
+
+        rebuild_param_target_reference(self, self.property_path)
+    except Exception:
+        pass
+
+
 # 参数项属性
 class ParamItem(bpy.types.PropertyGroup):
     enable: BoolProperty(name="enable", default=True)
-    name: StringProperty(name="", default="Parameter", description="参数名称")
-    property_path: StringProperty(name="Property Path", default="", description="参数的完整数据路径")
+    name: StringProperty(name="", default="Parameter", description="Display name for this parameter")
+    property_path: StringProperty(name="Property Path", default="", description="Full Blender RNA path for this parameter", update=property_path_update)
+    target_id_pointer: PointerProperty(type=bpy.types.ID)
+    target_id_path: StringProperty(name="Target ID Path", default="", description="Resolved root datablock path")
+    target_relative_path: StringProperty(name="Target Relative Path", default="", description="Path relative to the root datablock")
 
     stored_kind: EnumProperty(
         name="Stored Kind",
         items=[(t, t, "") for t in types],
         default="NONE",
-        description="存储的数据类型",
+        description="Stored value type",
     )
 
     stored_float: FloatProperty(default=0.0)
@@ -55,7 +67,7 @@ class ParamItem(bpy.types.PropertyGroup):
             ("NONE", "None", ""),
         ],
         default="NONE",
-        description="存储的指针类型",
+        description="Stored pointer type",
     )
     stored_action_pointer: bpy.props.PointerProperty(type=bpy.types.Action)
     stored_action_slots: bpy.props.StringProperty(default="")
@@ -85,7 +97,8 @@ class ParamSnapItem(bpy.types.PropertyGroup):
 class ParamSnapProperty(bpy.types.PropertyGroup):
     ParamSnap_properties_coll: CollectionProperty(type=ParamSnapItem)
     ParamSnap_properties_coll_index: IntProperty(name="ParamSnap Properties Index", default=0)
-    show_param_properties: BoolProperty(name="Show Param Properties", default=True)
+    show_param_properties: BoolProperty(name="Show Parameter Details", default=False)
+    show_reference_properties: BoolProperty(name="Show Property References", default=False)
 
 
 def register():

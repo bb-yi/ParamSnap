@@ -1,9 +1,8 @@
 import bpy
 from .utils import *
 import json
-from .i18n import translations
-import sys
-from . import bl_info
+from .i18n import translations, translatef
+from . import ADDON_VERSION
 
 BLENDER_ICONS = {i.identifier for i in bpy.types.UILayout.bl_rna.functions["prop"].parameters["icon"].enum_items}
 
@@ -32,25 +31,25 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
         icon = meta.get("icon", None)
         if prop_name == "stored_bool":
             icon = get_toggle_icon(icon, not item.stored_bool)
-            text = "存储的值"
+            text = translations("Stored Value")
         if icon not in BLENDER_ICONS:
             icon = "NONE"
         row = row.row()
         row.prop(item, prop_name, icon=icon, text=text)
         if item.stored_kind == "POINTER" and item.stored_pointer_kind == "Action":
-            row.prop(item, "stored_action_slots", text="动作槽")
+            row.prop(item, "stored_action_slots", text=translations("Action Slot"))
         return getattr(item, prop_name, None)
 
     def show_prop_path(self, row, item, text=""):
         try:
-            obj, prop_token, arr_index = resolve_ui_path(item.property_path)
+            obj, prop_token, arr_index, resolved_path = resolve_param_item_path(item, mutate=False)
             val_row = row.row()
             # --- A) IDProperty：prop_token 形如 '["Socket_3"]'
             if prop_token == None or obj == None:
                 row = row.row()
                 row.label(text=text)
                 row.alert = True
-                return row.label(text=f"路径属性不存在", icon="ERROR")
+                return row.label(text=translations("Path not found"), icon="ERROR")
             if prop_token.startswith('["') or prop_token.startswith("['"):
                 val_row.prop(obj, prop_token, text=text)
             else:
@@ -69,10 +68,10 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
                             val_row.prop(obj, prop_token, index=arr_index, text=text)
                         else:
                             if obj.bl_rna.properties.get(prop_token).type == "BOOLEAN":
-                                text = "当前的值"
+                                text = translations("Current Value")
                             val_row.prop(obj, prop_token, text=text)
                             if item.stored_kind == "POINTER" and item.stored_pointer_kind == "Action":
-                                val_row.prop(obj, "action_slot", text="动作槽")
+                                val_row.prop(obj, "action_slot", text=translations("Action Slot"))
         except Exception as e:
             row = row.row()
             row.label(text=text)
@@ -81,6 +80,7 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
             row.label(text=f"{e}", icon="ERROR")
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        path_state = get_param_path_state(item) if (item.property_path or item.target_relative_path) else None
         row = layout.row(align=True)
         col_enable = row.column(align=True)
         enable = getattr(item, "enable", False)
@@ -100,8 +100,12 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
         name_col.prop(item, "name", text="", emboss=True, icon="BOOKMARKS")
         right_row = main_split.row(align=True)
         right_row.enabled = enable
+        if path_state and path_state["has_conflict"]:
+            warn_row = right_row.row(align=True)
+            warn_row.alert = True
+            warn_row.label(text="", icon="ERROR")
         # ---- ④ 实际属性控件 ----
-        if item.property_path:
+        if item.property_path or item.target_relative_path:
             self.show_prop_path(right_row, item)
         self.show_stored(right_row, item)
         sync_row = right_row.row(align=True)
@@ -117,7 +121,7 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
 class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
     """在 3D 视图侧边栏创建面板"""
 
-    bl_label = "参数快照 (ParamSnap)"
+    bl_label = "Parameter Snapshot"
     bl_idname = "VIEW3D_PT_paramsnap"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -127,14 +131,10 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
 
-        col = layout.column(align=True)
-        col.operator("param.test_operator", text="测试操作")
-        # col.operator("param.swap_all_param", text="交换所有参数", icon="UV_SYNC_SELECT")
-
         col = layout.column()
         row = col.row(align=True)
-        col.label(text=translations("快照列表"))
-        col.label(text=translations("使用方法:  右键任意参数,添加到活动快照"), icon="INDIRECT_ONLY_ON")
+        col.label(text=translations("Snapshots"))
+        col.label(text=translations("How to use: Right-click any property and add it to the active snapshot"), icon="INDIRECT_ONLY_ON")
         row = col.row(align=True)
         row.template_list("PARAMS_UL_SnapshotList", "", scene.paramsnap_properties, "ParamSnap_properties_coll", scene.paramsnap_properties, "ParamSnap_properties_coll_index", rows=6)
         col1 = row.column(align=True)
@@ -158,6 +158,15 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
         col1.separator()
         col1.operator("param.copy_snapshot", text="", icon="COPYDOWN")
 
+        export_row = col.row(align=True)
+        export_row.enabled = len(scene.paramsnap_properties.ParamSnap_properties_coll) != 0
+        export_row.operator("param.export_snapshot_json", text=translations("Export JSON"), icon="EXPORT")
+        export_row.operator("param.copy_snapshot_json", text=translations("Copy JSON"), icon="COPYDOWN")
+
+        import_row = col.row(align=True)
+        import_row.operator("param.import_snapshot_json", text=translations("Import JSON"), icon="IMPORT")
+        import_row.operator("param.paste_snapshot_json", text=translations("Paste JSON"), icon="PASTEDOWN")
+
         row = col.row(align=True)
         if len(scene.paramsnap_properties.ParamSnap_properties_coll) != 0:
             ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
@@ -171,13 +180,12 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
             row_tile_left_2.label(text="")
             # row_tile_left_1.prop(activite_snap, "switch_enable", text="", emboss=False, icon="HIDE_OFF" if activite_snap.switch_enable else "HIDE_ON")
             row_tile_left_1.operator("param.inver_enable", text="", icon="ARROW_LEFTRIGHT", emboss=False)
-            row_tile_left_1.label(text="|参数名称|")
-            row_tile_left_1.label(text="|当前值|")
-            row_tile_left_1.label(text="|存储值|")
-            # row_tile_left_1.label(text="|同步选中参数|")
-            row_tile_left.label(text="|同步|")
-            row_tile_left.label(text="|更新|")
-            row_tile_left.label(text="|交换|")
+            row_tile_left_1.label(text=f"|{translations('Parameter Name')}|")
+            row_tile_left_1.label(text=f"|{translations('Current Value')}|")
+            row_tile_left_1.label(text=f"|{translations('Stored Value')}|")
+            row_tile_left.label(text=f"|{translations('Sync')}|")
+            row_tile_left.label(text=f"|{translations('Update')}|")
+            row_tile_left.label(text=f"|{translations('Swap')}|")
 
             # col.label(text=translations("|参数列表|------|参数名称|-------|当前值|------|存储值|------|同步选中参数|"))
             row = col.row(align=True)
@@ -224,56 +232,108 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
             op.coll_path = coll_path
             op.index_path = index_path
             op.where = "BOTTOM"
+
+            col1.separator()
+            col1.operator("param.resolve_all_path_conflicts", text="", icon="CHECKMARK")
         col = layout.column(align=True)
         if len(scene.paramsnap_properties.ParamSnap_properties_coll) != 0:
-            col.prop(scene.paramsnap_properties, "show_param_properties", text="显示参数信息", icon="TRIA_DOWN" if scene.paramsnap_properties.show_param_properties else "TRIA_RIGHT")
+            col.prop(
+                scene.paramsnap_properties,
+                "show_param_properties",
+                text=translations("Show Parameter Details"),
+                icon="TRIA_DOWN" if scene.paramsnap_properties.show_param_properties else "TRIA_RIGHT",
+            )
         if scene.paramsnap_properties.show_param_properties:
             if len(scene.paramsnap_properties.ParamSnap_properties_coll) > 0:
                 activite_Snap = scene.paramsnap_properties.ParamSnap_properties_coll[scene.paramsnap_properties.ParamSnap_properties_coll_index]
                 if len(activite_Snap.Param_properties_coll) > 0:
                     activite_params = activite_Snap.Param_properties_coll[activite_Snap.Param_properties_coll_index]
                     box = col.box()
-                    box.prop(activite_params, "enable", text="启用", icon="HIDE_OFF" if activite_params.enable else "HIDE_ON", emboss=True)
+                    box.prop(activite_params, "enable", text=translations("Enabled"), icon="HIDE_OFF" if activite_params.enable else "HIDE_ON", emboss=True)
                     box = col.box()
                     box.enabled = activite_params.enable
-                    box.prop(activite_params, "name", text="参数名称")
-                    valid_path = resolve_ui_path(activite_params.property_path)[0]
-                    row = box.row()
-                    row.alert = not valid_path
-                    row.prop(activite_params, "property_path", text="属性路径")
+                    box.prop(activite_params, "name", text=translations("Parameter Name"))
+                    box.prop(
+                        scene.paramsnap_properties,
+                        "show_reference_properties",
+                        text=translations("Show Property References"),
+                        icon="TRIA_DOWN" if scene.paramsnap_properties.show_reference_properties else "TRIA_RIGHT",
+                    )
+                    _resolved_ptr, prop_token, arr_index, resolved_path = resolve_param_item_path(activite_params, mutate=False)
+                    path_state = get_param_path_state(activite_params)
+                    if scene.paramsnap_properties.show_reference_properties:
+                        ref_box = box.box()
+                        row = ref_box.row()
+                        row.alert = (bool(path_state["property_path"]) and not path_state["property_valid"]) or path_state["has_conflict"]
+                        row.prop(activite_params, "property_path", text=translations("Property Path"))
+                        if activite_params.target_id_pointer is not None:
+                            target_name = getattr(activite_params.target_id_pointer, "name_full", activite_params.target_id_pointer.name)
+                            ref_box.label(text=translatef("Follow Datablock: {name}", name=target_name), icon="LINKED")
+                        if activite_params.target_relative_path:
+                            rel_row = ref_box.row()
+                            rel_row.enabled = False
+                            rel_row.label(text=translatef("Relative Path: {path}", path=activite_params.target_relative_path), icon="RNA")
+                        if path_state["stable_path"] and path_state["stable_path"] != path_state["property_path"]:
+                            stable_row = ref_box.row()
+                            stable_row.enabled = False
+                            stable_row.label(text=translatef("Datablock Reference Path: {path}", path=path_state["stable_path"]), icon="LINKED")
+                        if path_state["has_conflict"]:
+                            conflict_box = ref_box.box()
+                            conflict_box.alert = True
+                            conflict_box.label(text=translations("Property path and datablock reference point to different targets"), icon="ERROR")
+                            if not path_state["property_valid"]:
+                                conflict_box.label(text=translations("Property path is no longer valid"), icon="UNLINKED")
+                            if path_state["stable_path"] and not path_state["stable_valid"]:
+                                conflict_box.label(text=translations("Datablock reference is no longer valid"), icon="UNLINKED")
+                            action_row = conflict_box.row(align=True)
+                            stable_action = action_row.row(align=True)
+                            stable_action.enabled = path_state["stable_valid"]
+                            op = stable_action.operator("param.resolve_path_conflict", text=translations("Use Datablock Reference"), icon="LINKED")
+                            op.mode = "STABLE"
+                            property_action = action_row.row(align=True)
+                            property_action.enabled = path_state["property_valid"]
+                            op = property_action.operator("param.resolve_path_conflict", text=translations("Prefer Property Path"), icon="RNA")
+                            op.mode = "PROPERTY"
+                        elif path_state["has_path_mismatch"]:
+                            info_box = ref_box.box()
+                            info_box.label(text=translations("Property path and datablock reference resolve to the same target"), icon="INFO")
+                        if resolved_path and resolved_path not in {path_state["property_path"], path_state["stable_path"]}:
+                            live_row = ref_box.row()
+                            live_row.enabled = False
+                            live_row.label(text=translatef("Resolved Path: {path}", path=resolved_path), icon="FILE_REFRESH")
                     if 0:
                         box.prop(activite_params, "meta", text="元数据")
-                    box.prop(activite_params, "stored_kind", text="数据类型")
+                    box.prop(activite_params, "stored_kind", text=translations("Value Type"))
                     if activite_params.stored_kind == "POINTER":
-                        box.prop(activite_params, "stored_pointer_kind", text="指针类型")
+                        box.prop(activite_params, "stored_pointer_kind", text=translations("Pointer Type"))
                     val_box = box.box()
                     col = val_box.column(align=True)
-                    PARAMS_UL_ParamList.show_prop_path(self, col, activite_params, "当前的值")
-                    PARAMS_UL_ParamList.show_stored(self, col, activite_params, "存储的值")
+                    PARAMS_UL_ParamList.show_prop_path(self, col, activite_params, translations("Current Value"))
+                    PARAMS_UL_ParamList.show_stored(self, col, activite_params, translations("Stored Value"))
                     col = box.column(align=True)
                     # col.prop(activite_params, "meta", text="元数据")
-                    op = col.operator("param.sync_param", text="同步当前参数", icon="FILE_REFRESH")
+                    op = col.operator("param.sync_param", text=translations("Sync Selected Parameter"), icon="FILE_REFRESH")
                     op.ParamIndex = activite_Snap.Param_properties_coll_index
-                    op = col.operator("param.update_stored_value", text="更新存储值", icon="ANIM")
+                    op = col.operator("param.update_stored_value", text=translations("Update Stored Value"), icon="ANIM")
                     op.ParamIndex = activite_Snap.Param_properties_coll_index
-                    op = col.operator("param.swap_param", text="交换参数", icon="UV_SYNC_SELECT")
+                    op = col.operator("param.swap_param", text=translations("Swap Parameter"), icon="UV_SYNC_SELECT")
                     op.ParamIndex = activite_Snap.Param_properties_coll_index
 
         col = layout.column(align=True)
         col.scale_y = 2.0
         row = col.row(align=True)
         main_split = row.split(factor=0.8, align=True)
-        main_split.operator("param.sync_all_params", text="同步所有参数", icon="FILE_REFRESH")
-        main_split.operator("param.update_all_stored_value", text="更新所有存储值", icon="ANIM")
-        main_split.operator("param.swap_all_param", text="交换所有参数", icon="UV_SYNC_SELECT")
+        main_split.operator("param.sync_all_params", text=translations("Sync All Parameters"), icon="FILE_REFRESH")
+        main_split.operator("param.update_all_stored_value", text=translations("Update All Stored Values"), icon="ANIM")
+        main_split.operator("param.swap_all_param", text=translations("Swap All Parameters"), icon="UV_SYNC_SELECT")
 
         col = layout.column()
-        col.operator("param.copy_snapshot", text="复制快照", icon="COPYDOWN")
+        col.operator("param.copy_snapshot", text=translations("Copy Snapshot"), icon="COPYDOWN")
 
         col = layout.column()
-        version_str = ".".join(map(str, bl_info["version"]))
+        version_str = ".".join(map(str, ADDON_VERSION))
         col.alignment = "EXPAND"
-        col.label(text=f"Version: {version_str}", icon="INFO")
+        col.label(text=translatef("Version: {version}", version=version_str), icon="INFO")
 
 
 def draw_property_context_menu(self, context):
@@ -285,7 +345,7 @@ def draw_property_context_menu(self, context):
 
     if prop and ptr:
         layout.separator()
-        op = layout.operator("param.add_param_to_col", text="添加到活动快照", icon="INDIRECT_ONLY_ON")
+        layout.operator("param.add_param_to_col", text=translations("Add to Active Snapshot"), icon="INDIRECT_ONLY_ON")
     # else:
     #     layout.label(text="请选择属性", icon="ERROR")
 
@@ -328,41 +388,6 @@ def _resolve_target_id_from_properties(context):
     return base
 
 
-# 数据块转数据路径
-def id_to_bpy_data_path(id_block):
-    """返回类似 bpy.data.objects["Cube"] / bpy.data.materials["Mat"] 的路径字符串"""
-    if not isinstance(id_block, bpy.types.ID):
-        return None
-    name = id_block.name.replace('"', '\\"')
-    try:
-        ptr = id_block.as_pointer()
-    except Exception:
-        ptr = None
-    for attr in dir(bpy.data):
-        col = getattr(bpy.data, attr, None)
-        if col is None:
-            continue
-        if not hasattr(col, "get"):
-            continue
-        try:
-            item = col.get(id_block.name)
-        except Exception:
-            continue
-        if not item:
-            continue
-        try:
-            if ptr is None or item.as_pointer() == ptr:
-                return f'bpy.data.{attr}["{name}"]'
-        except Exception:
-            return f'bpy.data.{attr}["{name}"]'
-    return None
-
-
-def get_action_full_path(id_block):
-    base = id_to_bpy_data_path(id_block)
-    return (base + ".animation_data.action") if base else None
-
-
 # 添加到动画面板的部分
 def sna_add_to_action_panel(self, context, panel_name):
     layout = self.layout
@@ -372,7 +397,7 @@ def sna_add_to_action_panel(self, context, panel_name):
     base = id_to_bpy_data_path(id_block)  # 这里返回 bpy.data.xxx["Name"]
     path = base + ".animation_data.action"
 
-    op = layout.operator("param.add_action_to_param", text="添加到活动快照", icon="INDIRECT_ONLY_ON")
+    op = layout.operator("param.add_action_to_param", text=translations("Add to Active Snapshot"), icon="INDIRECT_ONLY_ON")
     op.name = id_block.name
     op.path = path
 
@@ -383,7 +408,7 @@ def sna_add_to_action_panel(self, context, panel_name):
             nt = getattr(mat, "node_tree", None)
             if nt and mat_base:
                 nt_path = mat_base + ".node_tree.animation_data.action"
-                op = layout.operator("param.add_action_to_param", text="添加着色器节点树动作到活动快照", icon="INDIRECT_ONLY_ON")
+                op = layout.operator("param.add_action_to_param", text=translations("Add Shader Node Tree Action to Active Snapshot"), icon="INDIRECT_ONLY_ON")
                 op.name = mat.name
                 op.path = nt_path
     elif panel_name == "DATA_PT_mesh_animation":
@@ -393,7 +418,7 @@ def sna_add_to_action_panel(self, context, panel_name):
             shape_keys = getattr(mesh, "shape_keys", None)
             if shape_keys and mesh_base:
                 sk_path = mesh_base + ".shape_keys.animation_data.action"
-                op = layout.operator("param.add_action_to_param", text="添加形状键动作到活动快照", icon="INDIRECT_ONLY_ON")
+                op = layout.operator("param.add_action_to_param", text=translations("Add Shape Key Action to Active Snapshot"), icon="INDIRECT_ONLY_ON")
                 op.name = mesh.name
                 op.path = sk_path
 

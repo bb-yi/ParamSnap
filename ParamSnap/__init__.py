@@ -11,18 +11,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# TODO 动画数据路径快速选择
-
-bl_info = {
-    "name": "Paramsnap",
-    "author": "LEDingQ",
-    "description": "",
-    "blender": (2, 80, 0),
-    "version": (0, 0, 3),
-    "location": "",
-    "warning": "",
-    "category": "Generic",
-}
+ADDON_VERSION = (0, 0, 6)
 
 import bpy
 from . import operators
