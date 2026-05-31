@@ -5,6 +5,55 @@ from .i18n import translations, translatef
 from . import ADDON_VERSION
 
 BLENDER_ICONS = {i.identifier for i in bpy.types.UILayout.bl_rna.functions["prop"].parameters["icon"].enum_items}
+_PARAM_CATEGORY_FILTER = ""
+
+
+def _safe_json_list(raw):
+    try:
+        value = json.loads(raw or "[]")
+    except Exception:
+        value = []
+    return value if isinstance(value, list) else []
+
+
+def draw_grouped_param_list(layout, snapshot):
+    global _PARAM_CATEGORY_FILTER
+    categories = []
+    category_to_indices = {}
+    for index, item in enumerate(snapshot.Param_properties_coll):
+        category = (item.category or translations("Other")).strip() or translations("Other")
+        if category not in category_to_indices:
+            categories.append(category)
+            category_to_indices[category] = []
+        category_to_indices[category].append(index)
+
+    collapsed = set(_safe_json_list(snapshot.collapsed_categories))
+    for category in categories:
+        indices = category_to_indices[category]
+        header = layout.row(align=True)
+        is_collapsed = category in collapsed
+        op = header.operator("param.toggle_param_category", text="", icon="TRIA_RIGHT" if is_collapsed else "TRIA_DOWN", emboss=False)
+        op.category = category
+        header.label(text=f"{category} ({len(indices)})", icon="FILE_FOLDER")
+        all_selected = all(snapshot.Param_properties_coll[index].copy_selected for index in indices)
+        select_op = header.operator("param.select_category_params", text="", icon="CHECKBOX_HLT" if all_selected else "CHECKBOX_DEHLT", depress=all_selected)
+        select_op.category = category
+        select_op.selected = not all_selected
+        if is_collapsed:
+            continue
+
+        _PARAM_CATEGORY_FILTER = category
+        list_rows = max(1, min(6, len(indices)))
+        layout.template_list(
+            "PARAMS_UL_ParamList",
+            f"_{category}",
+            snapshot,
+            "Param_properties_coll",
+            snapshot,
+            "Param_properties_coll_index",
+            rows=list_rows,
+        )
+    _PARAM_CATEGORY_FILTER = ""
 
 
 # item面板
@@ -21,6 +70,15 @@ class PARAMS_UL_SnapshotList(bpy.types.UIList):
 
 
 class PARAMS_UL_ParamList(bpy.types.UIList):
+    def filter_items(self, context, data, propname):
+        items = getattr(data, propname)
+        category_filter = _PARAM_CATEGORY_FILTER.strip()
+        flags = []
+        for item in items:
+            category = (item.category or translations("Other")).strip() or translations("Other")
+            flags.append(self.bitflag_filter_item if not category_filter or category == category_filter else 0)
+        return flags, []
+
     def show_stored(self, row, item, text=""):
         if item.stored_kind == "NONE":
             return None
@@ -30,8 +88,13 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
         meta = json.loads(item.meta)
         icon = meta.get("icon", None)
         if prop_name == "stored_bool":
-            icon = get_toggle_icon(icon, not item.stored_bool)
-            text = translations("Stored Value")
+            if is_layer_collection_exclude_param(item):
+                prop_name = "stored_bool_display"
+                icon = get_toggle_icon(icon, not item.stored_bool_display)
+                text = translations("Include in View Layer")
+            else:
+                icon = get_toggle_icon(icon, not item.stored_bool)
+                text = translations("Stored Value")
         if icon not in BLENDER_ICONS:
             icon = "NONE"
         row = row.row()
@@ -67,9 +130,12 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
                         if arr_index != -1:
                             val_row.prop(obj, prop_token, index=arr_index, text=text)
                         else:
-                            if obj.bl_rna.properties.get(prop_token).type == "BOOLEAN":
-                                text = translations("Current Value")
-                            val_row.prop(obj, prop_token, text=text)
+                            if is_layer_collection_exclude_target(obj, prop_token):
+                                val_row.prop(item, "current_bool_display", text=translations("Include in View Layer"))
+                            else:
+                                if obj.bl_rna.properties.get(prop_token).type == "BOOLEAN":
+                                    text = translations("Current Value")
+                                val_row.prop(obj, prop_token, text=text)
                             if item.stored_kind == "POINTER" and item.stored_pointer_kind == "Action":
                                 val_row.prop(obj, "action_slot", text=translations("Action Slot"))
         except Exception as e:
@@ -82,6 +148,7 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         path_state = get_param_path_state(item) if (item.property_path or item.target_relative_path) else None
         row = layout.row(align=True)
+        row.prop(item, "copy_selected", text="")
         col_enable = row.column(align=True)
         enable = getattr(item, "enable", False)
         col_enable.ui_units_x = 1.2
@@ -167,6 +234,9 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
         import_row.operator("param.import_snapshot_json", text=translations("Import JSON"), icon="IMPORT")
         import_row.operator("param.paste_snapshot_json", text=translations("Paste JSON"), icon="PASTEDOWN")
 
+        scene_row = col.row(align=True)
+        scene_row.operator("param.add_scene_compositor_node_group", text=translations("Add Scene Compositor Node Group"), icon="NODETREE")
+
         row = col.row(align=True)
         if len(scene.paramsnap_properties.ParamSnap_properties_coll) != 0:
             ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
@@ -188,16 +258,10 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
             row_tile_left.label(text=f"|{translations('Swap')}|")
 
             # col.label(text=translations("|参数列表|------|参数名称|-------|当前值|------|存储值|------|同步选中参数|"))
-            row = col.row(align=True)
-            row.template_list(
-                "PARAMS_UL_ParamList",
-                "",
-                scene.paramsnap_properties.ParamSnap_properties_coll[scene.paramsnap_properties.ParamSnap_properties_coll_index],
-                "Param_properties_coll",
-                scene.paramsnap_properties.ParamSnap_properties_coll[scene.paramsnap_properties.ParamSnap_properties_coll_index],
-                "Param_properties_coll_index",
-                rows=6,
-            )
+            param_box = col.box()
+            row = param_box.row(align=True)
+            list_col = row.column(align=True)
+            draw_grouped_param_list(list_col, activite_snap)
             col1 = row.column(align=True)
             snap_idx = scene.paramsnap_properties.ParamSnap_properties_coll_index
             coll_path = f"scene.paramsnap_properties.ParamSnap_properties_coll[{snap_idx}].Param_properties_coll"
@@ -235,6 +299,13 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
 
             col1.separator()
             col1.operator("param.resolve_all_path_conflicts", text="", icon="CHECKMARK")
+
+            copy_row = col.row(align=True)
+            copy_row.operator("param.copy_selected_params", text=translations("Copy Selected Parameters"), icon="COPYDOWN")
+            op = copy_row.operator("param.paste_copied_params", text=translations("Paste Parameters"), icon="PASTEDOWN")
+            op.include_values = True
+            op = copy_row.operator("param.paste_copied_params", text=translations("Paste and Store Current Values"), icon="DUPLICATE")
+            op.include_values = False
         col = layout.column(align=True)
         if len(scene.paramsnap_properties.ParamSnap_properties_coll) != 0:
             col.prop(
@@ -253,6 +324,7 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
                     box = col.box()
                     box.enabled = activite_params.enable
                     box.prop(activite_params, "name", text=translations("Parameter Name"))
+                    box.prop(activite_params, "category", text=translations("Category"))
                     box.prop(
                         scene.paramsnap_properties,
                         "show_reference_properties",

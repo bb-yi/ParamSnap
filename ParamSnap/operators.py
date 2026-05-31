@@ -2,7 +2,7 @@ import bpy
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 from .utils import *
 import json
-from .i18n import translatef
+from .i18n import translatef, translations
 
 
 def get_active_snapshot(context):
@@ -30,8 +30,46 @@ def get_active_param(context):
 
 
 def redraw_areas(context):
-    for area in context.screen.areas:
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return
+    for area in screen.areas:
         area.tag_redraw()
+
+
+def add_property_path_to_active_snapshot(context, full_path, display_name=""):
+    scene_props = context.scene.paramsnap_properties
+    snapshot_coll = scene_props.ParamSnap_properties_coll
+    if len(snapshot_coll) == 0:
+        snapshot = snapshot_coll.add()
+        scene_props.ParamSnap_properties_coll_index = len(snapshot_coll) - 1
+
+    snap_index = max(0, min(scene_props.ParamSnap_properties_coll_index, len(snapshot_coll) - 1))
+    scene_props.ParamSnap_properties_coll_index = snap_index
+    active_snapshot = snapshot_coll[snap_index]
+    param_coll = active_snapshot.Param_properties_coll
+
+    new_item = None
+    for i in range(len(param_coll)):
+        if param_targets_match(param_coll[i], full_path):
+            new_item = param_coll[i]
+            active_snapshot.Param_properties_coll_index = i
+            new_item.property_path = full_path
+            print(translatef("Parameter already exists"))
+            break
+
+    if new_item is None:
+        new_item = param_coll.add()
+        new_item.name = display_name or get_ui_name_from_path(full_path)
+        new_item.category = infer_param_category(full_path)
+        new_item.property_path = full_path
+        active_snapshot.Param_properties_coll_index = len(param_coll) - 1
+
+    value_copy, type_tag, meta, resolved_path = get_value_and_type_from_param_item(new_item)
+    if type_tag is None:
+        return None
+    assign_stored_from_value(new_item, value_copy, type_tag, meta)
+    return new_item
 
 
 def import_snapshots_from_payload(context, payload):
@@ -53,6 +91,32 @@ def import_snapshots_from_payload(context, payload):
 
     redraw_areas(context)
     return imported_count, skipped_params
+
+
+def _get_collapsed_categories(snapshot):
+    try:
+        value = json.loads(snapshot.collapsed_categories or "[]")
+    except Exception:
+        value = []
+    return set(value if isinstance(value, list) else [])
+
+
+class PARAM_OT_SelectParam(bpy.types.Operator):
+    bl_idname = "param.select_param"
+    bl_label = "Select Parameter"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: bpy.props.IntProperty(default=0)
+
+    def execute(self, context):
+        snapshot = get_active_snapshot(context)
+        if snapshot is None:
+            return {"CANCELLED"}
+        if not 0 <= self.index < len(snapshot.Param_properties_coll):
+            return {"CANCELLED"}
+        snapshot.Param_properties_coll_index = self.index
+        redraw_areas(context)
+        return {"FINISHED"}
 
 
 class PARAM_OT_GenericAddItem(bpy.types.Operator):
@@ -203,35 +267,154 @@ class PARAMS_OT_AddParamToCol(bpy.types.Operator):
 
     def execute(self, context):
         # 获取数据路径
-        bpy.ops.ui.copy_data_path_button(full_path=True)
-        full_path = context.window_manager.clipboard
-        ParamSnap_properties_coll = context.scene.paramsnap_properties.ParamSnap_properties_coll
-        ParamSnap_properties_coll_index = context.scene.paramsnap_properties.ParamSnap_properties_coll_index
-        if len(ParamSnap_properties_coll) == 0:
-            bpy.ops.param.add_item_generic(coll_path="scene.paramsnap_properties.ParamSnap_properties_coll", index_path="scene.paramsnap_properties.ParamSnap_properties_coll_index")
-        activite_snap = ParamSnap_properties_coll[ParamSnap_properties_coll_index]  # 活动的快照集合
-        Param_properties_coll = activite_snap.Param_properties_coll
-        new_item = None
-        has = False
-        for i in range(len(Param_properties_coll)):
-            if param_targets_match(Param_properties_coll[i], full_path):
-                new_item = Param_properties_coll[i]
-                has = True
-                activite_snap.Param_properties_coll_index = i
-                new_item.property_path = full_path
-                print(translatef("Parameter already exists"))
-                break
-        if not has:
-            new_item = Param_properties_coll.add()
-            new_item.name = get_ui_name_from_path(full_path)
-            new_item.property_path = full_path
-            activite_snap.Param_properties_coll_index = len(Param_properties_coll) - 1
-        value_copy, type_tag, meta, resolved_path = get_value_and_type_from_param_item(new_item)
-        assign_stored_from_value(new_item, value_copy, type_tag, meta)
+        full_path = get_button_property_path(context)
+        if not full_path:
+            self.report({"ERROR"}, translatef("Failed to get property path"))
+            return {"CANCELLED"}
+        new_item = add_property_path_to_active_snapshot(context, full_path)
+        if new_item is None:
+            self.report({"ERROR"}, translatef("Failed to add parameter: {path}", path=full_path))
+            return {"CANCELLED"}
         self.report({"INFO"}, translatef("Added parameter to ParamSnap: {name}", name=new_item.name))
-        # 刷新界面
-        for area in context.screen.areas:
-            area.tag_redraw()
+        redraw_areas(context)
+        return {"FINISHED"}
+
+
+class PARAMS_OT_AddSceneCompositorNodeGroup(bpy.types.Operator):
+    bl_idname = "param.add_scene_compositor_node_group"
+    bl_label = "Add Scene Compositor Node Group"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Add the current scene compositor node group to the active snapshot"
+
+    def execute(self, context):
+        scene_path = id_to_bpy_data_path(context.scene)
+        if not scene_path:
+            self.report({"ERROR"}, translatef("Failed to get scene path"))
+            return {"CANCELLED"}
+
+        full_path = f"{scene_path}.compositing_node_group"
+        new_item = add_property_path_to_active_snapshot(context, full_path, translations("Scene Compositor Node Group"))
+        if new_item is None:
+            self.report({"ERROR"}, translatef("Failed to add parameter: {path}", path=full_path))
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, translatef("Added parameter to ParamSnap: {name}", name=new_item.name))
+        redraw_areas(context)
+        return {"FINISHED"}
+
+
+class PARAM_OT_CopySelectedParams(bpy.types.Operator):
+    bl_idname = "param.copy_selected_params"
+    bl_label = "Copy Selected Parameters"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Copy selected parameters from the active snapshot"
+
+    def execute(self, context):
+        source_snapshot = get_active_snapshot(context)
+        if source_snapshot is None:
+            self.report({"ERROR"}, translatef("No snapshot available"))
+            return {"CANCELLED"}
+
+        selected_params = [param for param in source_snapshot.Param_properties_coll if param.copy_selected]
+        if not selected_params:
+            self.report({"ERROR"}, translatef("No selected parameters to copy"))
+            return {"CANCELLED"}
+
+        payload = build_param_clipboard_payload(selected_params)
+        context.scene.paramsnap_properties.param_clipboard = json.dumps(payload, ensure_ascii=False)
+        redraw_areas(context)
+        self.report(
+            {"INFO"},
+            translatef("Copied {params} selected parameter(s)", params=len(selected_params)),
+        )
+        return {"FINISHED"}
+
+
+class PARAM_OT_PasteCopiedParams(bpy.types.Operator):
+    bl_idname = "param.paste_copied_params"
+    bl_label = "Paste Copied Parameters"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Paste copied parameters into the active snapshot"
+
+    include_values: bpy.props.BoolProperty(name="Include Stored Values", default=True)
+
+    def execute(self, context):
+        target_snapshot = get_active_snapshot(context)
+        if target_snapshot is None:
+            self.report({"ERROR"}, translatef("No snapshot available"))
+            return {"CANCELLED"}
+
+        clipboard = context.scene.paramsnap_properties.param_clipboard
+        if not clipboard.strip():
+            self.report({"ERROR"}, translatef("No copied parameters to paste"))
+            return {"CANCELLED"}
+
+        try:
+            payload = json.loads(clipboard)
+            param_payloads = extract_param_clipboard_payloads(payload)
+        except Exception as exc:
+            self.report({"ERROR"}, translatef("Invalid copied parameters: {error}", error=exc))
+            return {"CANCELLED"}
+
+        pasted_count = 0
+        skipped_count = 0
+        for param_data in param_payloads:
+            pasted_param = paste_serialized_param_item(target_snapshot, param_data, copy_value=self.include_values)
+            if pasted_param is None:
+                skipped_count += 1
+                continue
+            pasted_count += 1
+
+        if pasted_count == 0:
+            self.report({"ERROR"}, translatef("No copied parameters were pasted"))
+            return {"CANCELLED"}
+
+        redraw_areas(context)
+        self.report(
+            {"INFO"},
+            translatef("Pasted {params} parameter(s), skipped {skipped}", params=pasted_count, skipped=skipped_count),
+        )
+        return {"FINISHED"}
+
+
+class PARAM_OT_ToggleParamCategory(bpy.types.Operator):
+    bl_idname = "param.toggle_param_category"
+    bl_label = "Toggle Parameter Category"
+    bl_options = {"REGISTER", "UNDO"}
+
+    category: bpy.props.StringProperty()
+
+    def execute(self, context):
+        snapshot = get_active_snapshot(context)
+        if snapshot is None:
+            return {"CANCELLED"}
+        collapsed = _get_collapsed_categories(snapshot)
+        if self.category in collapsed:
+            collapsed.remove(self.category)
+        else:
+            collapsed.add(self.category)
+        snapshot.collapsed_categories = json.dumps(sorted(collapsed), ensure_ascii=False)
+        redraw_areas(context)
+        return {"FINISHED"}
+
+
+class PARAM_OT_SelectCategoryParams(bpy.types.Operator):
+    bl_idname = "param.select_category_params"
+    bl_label = "Select Category Parameters"
+    bl_options = {"REGISTER", "UNDO"}
+
+    category: bpy.props.StringProperty()
+    selected: bpy.props.BoolProperty(default=True)
+
+    def execute(self, context):
+        snapshot = get_active_snapshot(context)
+        if snapshot is None:
+            return {"CANCELLED"}
+        for param in snapshot.Param_properties_coll:
+            category = (param.category or translations("Other")).strip() or translations("Other")
+            if category == self.category:
+                param.copy_selected = self.selected
+        redraw_areas(context)
         return {"FINISHED"}
 
 
@@ -297,15 +480,7 @@ class PARAM_OT_CopySnapshot(bpy.types.Operator):
             # print(activite_snapshot.Param_properties_coll[i].name)
             copy_param = copy_coll.Param_properties_coll.add()
             param = activite_snapshot.Param_properties_coll[i]
-            for prop in param.bl_rna.properties:
-                id = prop.identifier
-                if id == "rna_type" or prop.is_readonly:
-                    continue
-                try:
-                    setattr(copy_param, id, getattr(param, id))
-                except Exception as e:
-                    print(f"Copy snapshot {param.name} failed: {e}")
-                    pass
+            copy_param_item_storage(param, copy_param)
             copy_coll.Param_properties_coll_index = activite_snapshot.Param_properties_coll_index
         context.scene.paramsnap_properties.ParamSnap_properties_coll_index = len(Snapshot_coll) - 1
 
@@ -746,11 +921,17 @@ class PARAM_OT_InverEnable(bpy.types.Operator):
 
 
 classes = [
+    PARAM_OT_SelectParam,
     PARAM_OT_GenericAddItem,
     PARAM_OT_GenericRemoveItem,
     PARAM_OT_GenericMoveItem,
     PARAM_OT_GenericMoveItemToEnd,
     PARAMS_OT_AddParamToCol,
+    PARAMS_OT_AddSceneCompositorNodeGroup,
+    PARAM_OT_CopySelectedParams,
+    PARAM_OT_PasteCopiedParams,
+    PARAM_OT_ToggleParamCategory,
+    PARAM_OT_SelectCategoryParams,
     PARAM_OT_SyncParamOperator,
     PARAM_OT_SyncAllParamsOperator,
     PARAM_OT_CopySnapshot,
