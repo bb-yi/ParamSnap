@@ -135,7 +135,6 @@ class ParamSnapItem(bpy.types.PropertyGroup):
     name: StringProperty(name="", default=translations("Snapshot"))
     Param_properties_coll: CollectionProperty(type=ParamItem)
     Param_properties_coll_index: IntProperty(name="Param Properties Index", default=0)
-    collapsed_categories: StringProperty(name="Collapsed Categories", default="[]")
     switch_enable: BoolProperty(name="Switch Enable", default=True, update=switch_enable_update)
 
 
@@ -144,6 +143,7 @@ class ParamSnapProperty(bpy.types.PropertyGroup):
     ParamSnap_properties_coll: CollectionProperty(type=ParamSnapItem)
     ParamSnap_properties_coll_index: IntProperty(name="ParamSnap Properties Index", default=0)
     param_clipboard: StringProperty(name="Parameter Clipboard", default="")
+    active_category_filter: StringProperty(name="Active Category Filter", default="")
     show_param_properties: BoolProperty(name="Show Parameter Details", default=False)
     show_reference_properties: BoolProperty(name="Show Property References", default=False)
 

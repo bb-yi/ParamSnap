@@ -18,6 +18,7 @@ translations_dict = {
         ("*", "Parameter Name"): "参数名称",
         ("*", "Category"): "分类",
         ("*", "Other"): "其它",
+        ("*", "All"): "全部",
         ("*", "Collection State"): "集合状态",
         ("*", "Compositor"): "合成器",
         ("*", "Camera"): "相机",

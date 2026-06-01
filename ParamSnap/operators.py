@@ -61,7 +61,7 @@ def add_property_path_to_active_snapshot(context, full_path, display_name=""):
     if new_item is None:
         new_item = param_coll.add()
         new_item.name = display_name or get_ui_name_from_path(full_path)
-        new_item.category = infer_param_category(full_path)
+        new_item.category = translations("Other")
         new_item.property_path = full_path
         active_snapshot.Param_properties_coll_index = len(param_coll) - 1
 
@@ -93,12 +93,18 @@ def import_snapshots_from_payload(context, payload):
     return imported_count, skipped_params
 
 
-def _get_collapsed_categories(snapshot):
-    try:
-        value = json.loads(snapshot.collapsed_categories or "[]")
-    except Exception:
-        value = []
-    return set(value if isinstance(value, list) else [])
+def _normalize_param_category(param):
+    return (param.category or translations("Other")).strip() or translations("Other")
+
+
+def _get_effective_category_filter(scene_props, snapshot):
+    category_filter = (scene_props.active_category_filter or "").strip()
+    if not category_filter:
+        return ""
+    for param in snapshot.Param_properties_coll:
+        if _normalize_param_category(param) == category_filter:
+            return category_filter
+    return ""
 
 
 class PARAM_OT_SelectParam(bpy.types.Operator):
@@ -377,43 +383,43 @@ class PARAM_OT_PasteCopiedParams(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class PARAM_OT_ToggleParamCategory(bpy.types.Operator):
-    bl_idname = "param.toggle_param_category"
-    bl_label = "Toggle Parameter Category"
+class PARAM_OT_SetCategoryFilter(bpy.types.Operator):
+    bl_idname = "param.set_category_filter"
+    bl_label = "Set Category Filter"
     bl_options = {"REGISTER", "UNDO"}
 
-    category: bpy.props.StringProperty()
+    category: bpy.props.StringProperty(default="")
 
     def execute(self, context):
-        snapshot = get_active_snapshot(context)
-        if snapshot is None:
-            return {"CANCELLED"}
-        collapsed = _get_collapsed_categories(snapshot)
-        if self.category in collapsed:
-            collapsed.remove(self.category)
-        else:
-            collapsed.add(self.category)
-        snapshot.collapsed_categories = json.dumps(sorted(collapsed), ensure_ascii=False)
+        context.scene.paramsnap_properties.active_category_filter = (self.category or "").strip()
         redraw_areas(context)
         return {"FINISHED"}
 
 
-class PARAM_OT_SelectCategoryParams(bpy.types.Operator):
-    bl_idname = "param.select_category_params"
-    bl_label = "Select Category Parameters"
+class PARAM_OT_ToggleVisibleParamSelection(bpy.types.Operator):
+    bl_idname = "param.toggle_visible_param_selection"
+    bl_label = "Toggle Visible Parameter Selection"
     bl_options = {"REGISTER", "UNDO"}
 
-    category: bpy.props.StringProperty()
-    selected: bpy.props.BoolProperty(default=True)
-
     def execute(self, context):
+        scene_props = context.scene.paramsnap_properties
         snapshot = get_active_snapshot(context)
         if snapshot is None:
             return {"CANCELLED"}
+
+        category_filter = _get_effective_category_filter(scene_props, snapshot)
+        visible_params = []
         for param in snapshot.Param_properties_coll:
-            category = (param.category or translations("Other")).strip() or translations("Other")
-            if category == self.category:
-                param.copy_selected = self.selected
+            if not category_filter or _normalize_param_category(param) == category_filter:
+                visible_params.append(param)
+
+        if not visible_params:
+            return {"CANCELLED"}
+
+        selected = not all(param.copy_selected for param in visible_params)
+        for param in visible_params:
+            param.copy_selected = selected
+
         redraw_areas(context)
         return {"FINISHED"}
 
@@ -930,8 +936,8 @@ classes = [
     PARAMS_OT_AddSceneCompositorNodeGroup,
     PARAM_OT_CopySelectedParams,
     PARAM_OT_PasteCopiedParams,
-    PARAM_OT_ToggleParamCategory,
-    PARAM_OT_SelectCategoryParams,
+    PARAM_OT_SetCategoryFilter,
+    PARAM_OT_ToggleVisibleParamSelection,
     PARAM_OT_SyncParamOperator,
     PARAM_OT_SyncAllParamsOperator,
     PARAM_OT_CopySnapshot,

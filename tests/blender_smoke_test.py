@@ -94,6 +94,7 @@ def reset_snapshot_state():
     while props.ParamSnap_properties_coll:
         props.ParamSnap_properties_coll.remove(len(props.ParamSnap_properties_coll) - 1)
     props.ParamSnap_properties_coll_index = 0
+    props.active_category_filter = ""
 
 
 def make_fixture():
@@ -500,6 +501,7 @@ def test_compositor_node_group_snapshot(paths, fixture):
     assert_equal(added_param.property_path, paths["pointer_node_tree"], "Right-click add should store compositor node group pointer path")
     assert_equal(added_param.stored_pointer_kind, "NodeTree", "Right-click add should store a NodeTree pointer")
     assert_equal(added_param.stored_node_tree_pointer, fixture["compositor_group"], "Right-click add should store the active compositor group")
+    assert_equal(added_param.category, "Other", "Right-click add should not infer a category automatically")
 
     reset_snapshot_state()
     assert_equal(bpy.ops.param.add_scene_compositor_node_group(), {"FINISHED"}, "Panel add compositor node group operator should finish")
@@ -507,6 +509,7 @@ def test_compositor_node_group_snapshot(paths, fixture):
     added_param = added_snapshot.Param_properties_coll[0]
     assert_equal(added_param.property_path, paths["pointer_node_tree"], "Panel add should store compositor node group pointer path")
     assert_equal(added_param.stored_pointer_kind, "NodeTree", "Panel add should store a NodeTree pointer")
+    assert_equal(added_param.category, "Other", "Panel add should not infer a category automatically")
 
 
 def test_param_category_and_copy_paste(paths, fixture):
@@ -523,28 +526,36 @@ def test_param_category_and_copy_paste(paths, fixture):
     layer_collection = find_layer_collection(bpy.context.view_layer.layer_collection, fixture["root_collection"])
     layer_collection_path = utils.build_layer_collection_property_path(bpy.context, layer_collection, "exclude")
     param_collection, _, _, _ = new_param_item(layer_collection_path, "Collection State Param")
-    param_collection.category = utils.infer_param_category(param_collection.property_path)
+    param_collection.category = "Shot Collections"
     param_collection.copy_selected = True
-    assert_equal(param_collection.category, "Collection State", "LayerCollection exclude should infer Collection State category")
+    assert_equal(param_collection.category, "Shot Collections", "Parameter category should be user-defined")
 
     param_compositor, _, _, _ = new_param_item(paths["pointer_node_tree"], "Compositor Param")
-    param_compositor.category = utils.infer_param_category(param_compositor.property_path)
+    param_compositor.category = "Compositing"
     param_compositor.copy_selected = True
-    assert_equal(param_compositor.category, "Compositor", "Scene compositor node group should infer Compositor category")
+    assert_equal(param_compositor.category, "Compositing", "Parameter category should be user-defined")
 
-    source.collapsed_categories = '["Compositor"]'
-    assert_equal(bpy.ops.param.toggle_param_category(category="Compositor"), {"FINISHED"}, "Toggle category should expand a collapsed category")
-    assert_true("Compositor" not in source.collapsed_categories, "Category should be removed from collapsed list after toggle")
-    assert_equal(bpy.ops.param.toggle_param_category(category="Compositor"), {"FINISHED"}, "Toggle category should collapse a category")
-    assert_true("Compositor" in source.collapsed_categories, "Category should be added to collapsed list after toggle")
-    assert_equal(bpy.ops.param.select_param(index=1), {"FINISHED"}, "Grouped list row select should finish")
-    assert_equal(source.Param_properties_coll_index, 1, "Grouped list row select should update active parameter index")
-    ui._PARAM_CATEGORY_FILTER = "Compositor"
+    assert_equal(bpy.ops.param.select_param(index=1), {"FINISHED"}, "Parameter row select should finish")
+    assert_equal(source.Param_properties_coll_index, 1, "Parameter row select should update active parameter index")
+    assert_equal(bpy.ops.param.set_category_filter(category="Compositing"), {"FINISHED"}, "Set category filter should finish")
+    assert_equal(props.active_category_filter, "Compositing", "Category filter should be stored on scene props")
     filter_self = type("FilterSelf", (), {"bitflag_filter_item": 1 << 30})()
     filter_flags, _filter_order = ui.PARAMS_UL_ParamList.filter_items(filter_self, bpy.context, source, "Param_properties_coll")
     visible_flags = [bool(flag & filter_self.bitflag_filter_item) for flag in filter_flags]
-    assert_equal(visible_flags, [False, True], "Category UIList filter should only show matching params")
-    ui._PARAM_CATEGORY_FILTER = ""
+    assert_equal(visible_flags, [False, True], "Category UIList filter should only show matching params in the single list")
+
+    param_collection.copy_selected = False
+    param_compositor.copy_selected = False
+    assert_equal(bpy.ops.param.toggle_visible_param_selection(), {"FINISHED"}, "Visible selection toggle should select filtered params")
+    assert_true(not param_collection.copy_selected, "Visible selection toggle should not affect hidden categories")
+    assert_true(param_compositor.copy_selected, "Visible selection toggle should select the filtered category")
+    assert_equal(bpy.ops.param.toggle_visible_param_selection(), {"FINISHED"}, "Visible selection toggle should clear selected filtered params")
+    assert_true(not param_compositor.copy_selected, "Visible selection toggle should clear the filtered category")
+
+    assert_equal(bpy.ops.param.set_category_filter(category=""), {"FINISHED"}, "Clearing category filter should finish")
+    assert_equal(props.active_category_filter, "", "Category filter should be cleared for all params")
+    assert_equal(bpy.ops.param.toggle_visible_param_selection(), {"FINISHED"}, "All-visible selection toggle should select all params")
+    assert_true(param_collection.copy_selected and param_compositor.copy_selected, "All-visible selection toggle should affect every category")
 
     assert_equal(bpy.ops.param.copy_selected_params(), {"FINISHED"}, "Copy selected params should finish")
     assert_true(props.param_clipboard.strip(), "Copy selected params should fill the parameter clipboard")
@@ -554,7 +565,7 @@ def test_param_category_and_copy_paste(paths, fixture):
     assert_equal(bpy.ops.param.paste_copied_params(include_values=True), {"FINISHED"}, "Paste selected params should finish")
     assert_equal(len(target_a.Param_properties_coll), 2, "Target snapshot should receive selected parameters")
     copied_categories = {param.category for param in target_a.Param_properties_coll}
-    assert_equal(copied_categories, {"Collection State", "Compositor"}, "Pasted params should preserve categories")
+    assert_equal(copied_categories, {"Shot Collections", "Compositing"}, "Pasted params should preserve user-defined categories")
     assert_true(not any(param.copy_selected for param in target_a.Param_properties_coll), "Pasted params should not remain selected in targets")
 
     target_a.Param_properties_coll.clear()
@@ -563,19 +574,19 @@ def test_param_category_and_copy_paste(paths, fixture):
     current_group = bpy.data.node_groups.new(f"{PREFIX}ClipboardCurrent", "CompositorNodeTree")
     scene.compositing_node_group = current_group
     assert_equal(bpy.ops.param.paste_copied_params(include_values=False), {"FINISHED"}, "Paste references only should finish")
-    target_compositor = next(param for param in target_a.Param_properties_coll if param.category == "Compositor")
+    target_compositor = next(param for param in target_a.Param_properties_coll if param.category == "Compositing")
     assert_equal(target_compositor.stored_node_tree_pointer, current_group, "Reference-only paste should capture the target snapshot current value")
     scene.compositing_node_group = original_group
 
     payload = utils.build_snapshot_export_payload(source)
     categories = {param_data["category"] for param_data in payload["snapshots"][0]["params"]}
-    assert_equal(categories, {"Collection State", "Compositor"}, "JSON export should preserve parameter categories")
+    assert_equal(categories, {"Shot Collections", "Compositing"}, "JSON export should preserve user-defined parameter categories")
 
     imported = props.ParamSnap_properties_coll.add()
     skipped = utils.apply_serialized_snapshot_item(imported, payload["snapshots"][0])
     assert_equal(skipped, 0, "JSON import with categories should not skip params")
     imported_categories = {param.category for param in imported.Param_properties_coll}
-    assert_equal(imported_categories, {"Collection State", "Compositor"}, "JSON import should restore parameter categories")
+    assert_equal(imported_categories, {"Shot Collections", "Compositing"}, "JSON import should restore user-defined parameter categories")
 
 
 def test_datablock_rename_rebuild(paths, fixture):

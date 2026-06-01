@@ -5,55 +5,91 @@ from .i18n import translations, translatef
 from . import ADDON_VERSION
 
 BLENDER_ICONS = {i.identifier for i in bpy.types.UILayout.bl_rna.functions["prop"].parameters["icon"].enum_items}
-_PARAM_CATEGORY_FILTER = ""
 
 
-def _safe_json_list(raw):
-    try:
-        value = json.loads(raw or "[]")
-    except Exception:
-        value = []
-    return value if isinstance(value, list) else []
+def _param_category(item):
+    return (item.category or translations("Other")).strip() or translations("Other")
 
 
-def draw_grouped_param_list(layout, snapshot):
-    global _PARAM_CATEGORY_FILTER
+def _snapshot_categories(snapshot):
     categories = []
-    category_to_indices = {}
-    for index, item in enumerate(snapshot.Param_properties_coll):
-        category = (item.category or translations("Other")).strip() or translations("Other")
-        if category not in category_to_indices:
+    counts = {}
+    for item in snapshot.Param_properties_coll:
+        category = _param_category(item)
+        if category not in counts:
             categories.append(category)
-            category_to_indices[category] = []
-        category_to_indices[category].append(index)
+            counts[category] = 0
+        counts[category] += 1
+    return categories, counts
 
-    collapsed = set(_safe_json_list(snapshot.collapsed_categories))
-    for category in categories:
-        indices = category_to_indices[category]
-        header = layout.row(align=True)
-        is_collapsed = category in collapsed
-        op = header.operator("param.toggle_param_category", text="", icon="TRIA_RIGHT" if is_collapsed else "TRIA_DOWN", emboss=False)
-        op.category = category
-        header.label(text=f"{category} ({len(indices)})", icon="FILE_FOLDER")
-        all_selected = all(snapshot.Param_properties_coll[index].copy_selected for index in indices)
-        select_op = header.operator("param.select_category_params", text="", icon="CHECKBOX_HLT" if all_selected else "CHECKBOX_DEHLT", depress=all_selected)
-        select_op.category = category
-        select_op.selected = not all_selected
-        if is_collapsed:
-            continue
 
-        _PARAM_CATEGORY_FILTER = category
-        list_rows = max(1, min(6, len(indices)))
-        layout.template_list(
-            "PARAMS_UL_ParamList",
-            f"_{category}",
-            snapshot,
-            "Param_properties_coll",
-            snapshot,
-            "Param_properties_coll_index",
-            rows=list_rows,
+def _active_category_filter(scene_props, snapshot):
+    category_filter = (scene_props.active_category_filter or "").strip()
+    if not category_filter:
+        return ""
+    categories, _counts = _snapshot_categories(snapshot)
+    return category_filter if category_filter in categories else ""
+
+
+def draw_param_category_filter(layout, scene_props, snapshot):
+    categories, counts = _snapshot_categories(snapshot)
+    active_filter = _active_category_filter(scene_props, snapshot)
+    visible_items = [item for item in snapshot.Param_properties_coll if not active_filter or _param_category(item) == active_filter]
+    selected_count = sum(1 for item in visible_items if item.copy_selected)
+
+    if active_filter:
+        menu_text = f"{active_filter} ({counts.get(active_filter, 0)})"
+    else:
+        menu_text = f"{translations('All')} ({len(snapshot.Param_properties_coll)})"
+
+    filter_row = layout.row(align=True)
+    active_spacer = filter_row.column(align=True)
+    active_spacer.ui_units_x = 1.1
+    active_spacer.label(text="")
+    select_col = filter_row.column(align=True)
+    select_col.ui_units_x = 1.15
+    select_col.operator(
+        "param.toggle_visible_param_selection",
+        text="",
+        icon="CHECKBOX_HLT" if visible_items and selected_count == len(visible_items) else "CHECKBOX_DEHLT",
+        depress=bool(visible_items and selected_count == len(visible_items)),
+    )
+    filter_row.menu("PARAMS_MT_ParamCategoryFilter", text=menu_text, icon="FILTER")
+    if visible_items:
+        filter_row.label(text=f"{selected_count}/{len(visible_items)}")
+
+
+class PARAMS_MT_ParamCategoryFilter(bpy.types.Menu):
+    bl_label = "Parameter Category Filter"
+    bl_idname = "PARAMS_MT_ParamCategoryFilter"
+
+    def draw(self, context):
+        layout = self.layout
+        scene_props = context.scene.paramsnap_properties
+        snapshot_coll = scene_props.ParamSnap_properties_coll
+        if not snapshot_coll:
+            return
+
+        snap_index = max(0, min(scene_props.ParamSnap_properties_coll_index, len(snapshot_coll) - 1))
+        snapshot = snapshot_coll[snap_index]
+        categories, counts = _snapshot_categories(snapshot)
+        active_filter = _active_category_filter(scene_props, snapshot)
+
+        op = layout.operator(
+            "param.set_category_filter",
+            text=f"{translations('All')} ({len(snapshot.Param_properties_coll)})",
+            icon="CHECKMARK" if active_filter == "" else "NONE",
         )
-    _PARAM_CATEGORY_FILTER = ""
+        op.category = ""
+        if categories:
+            layout.separator()
+        for category in categories:
+            op = layout.operator(
+                "param.set_category_filter",
+                text=f"{category} ({counts[category]})",
+                icon="CHECKMARK" if active_filter == category else "NONE",
+            )
+            op.category = category
 
 
 # item面板
@@ -72,10 +108,11 @@ class PARAMS_UL_SnapshotList(bpy.types.UIList):
 class PARAMS_UL_ParamList(bpy.types.UIList):
     def filter_items(self, context, data, propname):
         items = getattr(data, propname)
-        category_filter = _PARAM_CATEGORY_FILTER.strip()
+        scene_props = getattr(context.scene, "paramsnap_properties", None) if context else None
+        category_filter = _active_category_filter(scene_props, data) if scene_props else ""
         flags = []
         for item in items:
-            category = (item.category or translations("Other")).strip() or translations("Other")
+            category = _param_category(item)
             flags.append(self.bitflag_filter_item if not category_filter or category == category_filter else 0)
         return flags, []
 
@@ -148,7 +185,16 @@ class PARAMS_UL_ParamList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         path_state = get_param_path_state(item) if (item.property_path or item.target_relative_path) else None
         row = layout.row(align=True)
-        row.prop(item, "copy_selected", text="")
+        active_index = getattr(active_data, active_propname, -1) if active_data and active_propname else -1
+        active_icon = "RADIOBUT_ON" if active_index == index else "RADIOBUT_OFF"
+        if active_icon not in BLENDER_ICONS:
+            active_icon = "LAYER_ACTIVE" if active_index == index and "LAYER_ACTIVE" in BLENDER_ICONS else "NONE"
+        active_col = row.column(align=True)
+        active_col.ui_units_x = 1.1
+        active_col.label(text="", icon=active_icon)
+        select_col = row.column(align=True)
+        select_col.ui_units_x = 1.15
+        select_col.prop(item, "copy_selected", text="")
         col_enable = row.column(align=True)
         enable = getattr(item, "enable", False)
         col_enable.ui_units_x = 1.2
@@ -259,9 +305,18 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
 
             # col.label(text=translations("|参数列表|------|参数名称|-------|当前值|------|存储值|------|同步选中参数|"))
             param_box = col.box()
+            draw_param_category_filter(param_box, scene.paramsnap_properties, activite_snap)
             row = param_box.row(align=True)
             list_col = row.column(align=True)
-            draw_grouped_param_list(list_col, activite_snap)
+            list_col.template_list(
+                "PARAMS_UL_ParamList",
+                "",
+                activite_snap,
+                "Param_properties_coll",
+                activite_snap,
+                "Param_properties_coll_index",
+                rows=8,
+            )
             col1 = row.column(align=True)
             snap_idx = scene.paramsnap_properties.ParamSnap_properties_coll_index
             coll_path = f"scene.paramsnap_properties.ParamSnap_properties_coll[{snap_idx}].Param_properties_coll"
@@ -575,6 +630,7 @@ def _resolve_button_context_menu_cls():
 
 def register():
     global _BUTTON_CONTEXT_MENU_CLS
+    bpy.utils.register_class(PARAMS_MT_ParamCategoryFilter)
     bpy.utils.register_class(PARAMS_UL_SnapshotList)
     bpy.utils.register_class(PARAMS_UL_ParamList)
     bpy.utils.register_class(VIEW3D_PT_ParamSnapPanel)
@@ -588,9 +644,6 @@ def register():
 
 def unregister():
     global _BUTTON_CONTEXT_MENU_CLS
-    bpy.utils.unregister_class(PARAMS_UL_SnapshotList)
-    bpy.utils.unregister_class(PARAMS_UL_ParamList)
-    bpy.utils.unregister_class(VIEW3D_PT_ParamSnapPanel)
     menu_cls = _BUTTON_CONTEXT_MENU_CLS or _resolve_button_context_menu_cls()
     if menu_cls is not None:
         try:
@@ -599,3 +652,7 @@ def unregister():
             pass
     _BUTTON_CONTEXT_MENU_CLS = None
     unregister_animation_panels()
+    bpy.utils.unregister_class(VIEW3D_PT_ParamSnapPanel)
+    bpy.utils.unregister_class(PARAMS_UL_ParamList)
+    bpy.utils.unregister_class(PARAMS_UL_SnapshotList)
+    bpy.utils.unregister_class(PARAMS_MT_ParamCategoryFilter)
