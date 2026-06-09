@@ -282,6 +282,7 @@ class VIEW3D_PT_ParamSnapPanel(bpy.types.Panel):
 
         scene_row = col.row(align=True)
         scene_row.operator("param.add_scene_compositor_node_group", text=translations("Add Scene Compositor Node Group"), icon="NODETREE")
+        scene_row.operator("param.add_scene_world", text=translations("Add Scene World"), icon="WORLD")
 
         row = col.row(align=True)
         if len(scene.paramsnap_properties.ParamSnap_properties_coll) != 0:

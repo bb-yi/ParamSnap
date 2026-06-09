@@ -108,6 +108,7 @@ class ParamItem(bpy.types.PropertyGroup):
             ("Object", "Object", ""),
             ("Collection", "Collection", ""),
             ("NodeTree", "NodeTree", ""),
+            ("World", "World", ""),
             ("NONE", "None", ""),
         ],
         default="NONE",
@@ -118,6 +119,7 @@ class ParamItem(bpy.types.PropertyGroup):
     stored_object_pointer: bpy.props.PointerProperty(type=bpy.types.Object)
     stored_collection_pointer: bpy.props.PointerProperty(type=bpy.types.Collection)
     stored_node_tree_pointer: bpy.props.PointerProperty(type=bpy.types.NodeTree)
+    stored_world_pointer: bpy.props.PointerProperty(type=bpy.types.World)
 
 
 def switch_enable_update(self, context):

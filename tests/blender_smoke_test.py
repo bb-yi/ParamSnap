@@ -84,6 +84,10 @@ def cleanup_test_data():
         if node_group.name.startswith(PREFIX):
             bpy.data.node_groups.remove(node_group)
 
+    for world in list(bpy.data.worlds):
+        if world.name.startswith(PREFIX):
+            bpy.data.worlds.remove(world)
+
     for collection in list(bpy.data.collections):
         if collection.name.startswith(PREFIX):
             bpy.data.collections.remove(collection)
@@ -143,6 +147,9 @@ def make_fixture():
     compositor_group = bpy.data.node_groups.new(f"{PREFIX}CompositorGroupA", "CompositorNodeTree")
     compositor_group_alt = bpy.data.node_groups.new(f"{PREFIX}CompositorGroupB", "CompositorNodeTree")
     scene.compositing_node_group = compositor_group
+    world = bpy.data.worlds.new(f"{PREFIX}WorldA")
+    world_alt = bpy.data.worlds.new(f"{PREFIX}WorldB")
+    scene.world = world
 
     paths = {
         "root_object": f'bpy.data.objects["{child_obj.name}"]',
@@ -161,6 +168,7 @@ def make_fixture():
         "pointer_collection": f'bpy.data.objects["{instance_obj.name}"].instance_collection',
         "pointer_action": f'bpy.data.objects["{child_obj.name}"].animation_data.action',
         "pointer_node_tree": f'bpy.data.scenes["{scene.name}"].compositing_node_group',
+        "pointer_world": f'bpy.data.scenes["{scene.name}"].world',
         "idprop_object_float": f'bpy.data.objects["{child_obj.name}"]["ps_float"]',
         "idprop_object_string": f'bpy.data.objects["{child_obj.name}"]["ps_label"]',
         "layer_collection_exclude": f'bpy.data.scenes["{scene.name}"].view_layers["{bpy.context.view_layer.name}"].layer_collection.children["{root_collection.name}"].exclude',
@@ -179,6 +187,8 @@ def make_fixture():
         "action": action,
         "compositor_group": compositor_group,
         "compositor_group_alt": compositor_group_alt,
+        "world": world,
+        "world_alt": world_alt,
         "paths": paths,
     }
 
@@ -234,6 +244,7 @@ def test_path_resolution(paths, fixture):
         "pointer_collection",
         "pointer_action",
         "pointer_node_tree",
+        "pointer_world",
         "idprop_object_float",
         "idprop_object_string",
         "layer_collection_exclude",
@@ -265,6 +276,7 @@ def test_value_type_detection(paths, fixture):
         ("pointer_collection", "POINTER"),
         ("pointer_action", "POINTER"),
         ("pointer_node_tree", "POINTER"),
+        ("pointer_world", "POINTER"),
         ("layer_collection_exclude", "BOOLEAN"),
     ]
     for key, expected_type in cases:
@@ -277,10 +289,12 @@ def test_value_type_detection(paths, fixture):
     _, _, collection_meta = utils.get_value_and_type_from_path(paths["pointer_collection"])
     _, _, action_meta = utils.get_value_and_type_from_path(paths["pointer_action"])
     _, _, node_tree_meta = utils.get_value_and_type_from_path(paths["pointer_node_tree"])
+    _, _, world_meta = utils.get_value_and_type_from_path(paths["pointer_world"])
     assert_equal(obj_meta.get("fixed_type"), "Object", "Object pointer should expose fixed type")
     assert_equal(collection_meta.get("fixed_type"), "Collection", "Collection pointer should expose fixed type")
     assert_equal(action_meta.get("fixed_type"), "Action", "Action pointer should expose fixed type")
     assert_equal(node_tree_meta.get("fixed_type"), "NodeTree", "NodeTree pointer should expose fixed type")
+    assert_equal(world_meta.get("fixed_type"), "World", "World pointer should expose fixed type")
 
 
 def test_snapshot_roundtrip(paths, fixture):
@@ -325,6 +339,11 @@ def test_snapshot_roundtrip(paths, fixture):
     fixture["scene"].compositing_node_group = fixture["compositor_group_alt"]
     assert_equal(utils.apply_stored_to_target(param), 1, "NodeTree pointer apply should succeed")
     assert_equal(fixture["scene"].compositing_node_group, stored_value, "NodeTree pointer should restore the original target")
+
+    param, stored_value, _, _ = new_param_item(paths["pointer_world"], "Pointer World")
+    fixture["scene"].world = fixture["world_alt"]
+    assert_equal(utils.apply_stored_to_target(param), 1, "World pointer apply should succeed")
+    assert_equal(fixture["scene"].world, stored_value, "World pointer should restore the original target")
 
     layer_collection = find_layer_collection(bpy.context.view_layer.layer_collection, fixture["root_collection"])
     layer_collection.exclude = True
@@ -512,6 +531,90 @@ def test_compositor_node_group_snapshot(paths, fixture):
     assert_equal(added_param.category, "Other", "Panel add should not infer a category automatically")
 
 
+def test_scene_world_snapshot(paths, fixture):
+    log("Testing scene world snapshot, swap, and JSON roundtrip")
+
+    reset_snapshot_state()
+    scene = fixture["scene"]
+    scene.world = fixture["world"]
+    param, stored_value, value_type, meta = new_param_item(paths["pointer_world"], "Scene World")
+    assert_equal(value_type, "POINTER", "Scene world should store as a pointer")
+    assert_equal(meta.get("fixed_type"), "World", "Scene world pointer should be a World")
+    assert_equal(param.stored_pointer_kind, "World", "Stored pointer kind should be World")
+    assert_equal(param.stored_world_pointer, fixture["world"], "Stored world should be the active scene world")
+
+    scene.world = fixture["world_alt"]
+    assert_equal(utils.apply_stored_to_target(param), 1, "Scene world sync should succeed")
+    assert_equal(scene.world, stored_value, "Scene world should restore the stored world")
+
+    scene.world = fixture["world_alt"]
+    snapshot = bpy.context.scene.paramsnap_properties.ParamSnap_properties_coll[0]
+    snapshot.Param_properties_coll_index = 0
+    result = bpy.ops.param.swap_param(ParamIndex=0)
+    assert_equal(result, {"FINISHED"}, "Scene world swap should finish")
+    assert_equal(scene.world, fixture["world"], "Scene world swap should apply stored value")
+    assert_equal(param.stored_world_pointer, fixture["world_alt"], "Scene world swap should store previous current value")
+
+    payload = utils.build_snapshot_export_payload(snapshot)
+    serialized = payload["snapshots"][0]["params"][0]
+    assert_equal(serialized["stored_pointer_kind"], "World", "JSON export should preserve World pointer kind")
+    assert_equal(serialized["value"]["name"], fixture["world_alt"].name, "JSON export should preserve World name")
+
+    imported_snapshot = bpy.context.scene.paramsnap_properties.ParamSnap_properties_coll.add()
+    skipped = utils.apply_serialized_snapshot_item(imported_snapshot, payload["snapshots"][0])
+    assert_equal(skipped, 0, "JSON import should accept World pointer parameters")
+    imported_param = imported_snapshot.Param_properties_coll[0]
+    assert_equal(imported_param.stored_pointer_kind, "World", "JSON import should restore World pointer kind")
+    assert_equal(imported_param.stored_world_pointer, fixture["world_alt"], "JSON import should restore World pointer")
+
+    FakeContext = type(
+        "FakeContext",
+        (),
+        {
+            "scene": scene,
+            "view_layer": bpy.context.view_layer,
+            "button_pointer": fixture["world"],
+            "button_prop": fixture["world"].bl_rna.properties["name"],
+            "window_manager": bpy.context.window_manager,
+        },
+    )
+
+    scene.world = fixture["world"]
+    rewritten_path = utils.get_button_property_path(FakeContext())
+    assert_equal(rewritten_path, paths["pointer_world"], "Right-clicking the scene world name should store the scene pointer path")
+
+    reset_snapshot_state()
+
+    class FakeArea:
+        def tag_redraw(self):
+            pass
+
+    class FakeScreen:
+        areas = [FakeArea()]
+
+    FakeOperatorContext = type("FakeOperatorContext", (FakeContext,), {"screen": FakeScreen()})
+
+    class FakeOperator:
+        def report(self, level, message):
+            pass
+
+    assert_equal(ParamSnap.operators.PARAMS_OT_AddParamToCol.execute(FakeOperator(), FakeOperatorContext()), {"FINISHED"}, "Right-click add on scene world name should finish")
+    added_snapshot = bpy.context.scene.paramsnap_properties.ParamSnap_properties_coll[0]
+    added_param = added_snapshot.Param_properties_coll[0]
+    assert_equal(added_param.property_path, paths["pointer_world"], "Right-click add should store scene world pointer path")
+    assert_equal(added_param.stored_pointer_kind, "World", "Right-click add should store a World pointer")
+    assert_equal(added_param.stored_world_pointer, fixture["world"], "Right-click add should store the active scene world")
+    assert_equal(added_param.category, "Other", "Right-click add should not infer a category automatically")
+
+    reset_snapshot_state()
+    assert_equal(bpy.ops.param.add_scene_world(), {"FINISHED"}, "Panel add scene world operator should finish")
+    added_snapshot = bpy.context.scene.paramsnap_properties.ParamSnap_properties_coll[0]
+    added_param = added_snapshot.Param_properties_coll[0]
+    assert_equal(added_param.property_path, paths["pointer_world"], "Panel add should store scene world pointer path")
+    assert_equal(added_param.stored_pointer_kind, "World", "Panel add should store a World pointer")
+    assert_equal(added_param.category, "Other", "Panel add should not infer a category automatically")
+
+
 def test_param_category_and_copy_paste(paths, fixture):
     log("Testing parameter categories and copying selected params through the parameter clipboard")
 
@@ -630,6 +733,7 @@ def main():
         test_copy_snapshot_layer_collection_no_side_effect(paths, fixture)
         test_layer_collection_rename_rebuild(paths, fixture)
         test_compositor_node_group_snapshot(paths, fixture)
+        test_scene_world_snapshot(paths, fixture)
         test_param_category_and_copy_paste(paths, fixture)
         test_datablock_rename_rebuild(paths, fixture)
 

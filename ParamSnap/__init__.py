@@ -11,7 +11,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-ADDON_VERSION = (0, 0, 17)
+ADDON_VERSION = (0, 0, 18)
 
 import bpy
 from . import operators

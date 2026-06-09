@@ -65,6 +65,8 @@ translations_dict = {
         ("*", "Add Shape Key Action to Active Snapshot"): "添加形态键动作到活动快照",
         ("*", "Add Scene Compositor Node Group"): "添加场景合成器节点组",
         ("*", "Scene Compositor Node Group"): "场景合成器节点组",
+        ("*", "Add Scene World"): "添加场景世界环境",
+        ("*", "Scene World"): "场景世界环境",
         ("*", "Failed to add parameter: {path}"): "添加参数失败: {path}",
         ("*", "Failed to get scene path"): "获取场景路径失败",
         ("*", "Invert Selection"): "反转启用",

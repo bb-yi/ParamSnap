@@ -20,6 +20,7 @@ _POINTER_COLLECTIONS = {
     "Object": "objects",
     "Collection": "collections",
     "NodeTree": "node_groups",
+    "World": "worlds",
 }
 
 _VECTOR_SIZES = {
@@ -60,6 +61,7 @@ PARAM_ITEM_COPY_FIELDS = (
     "stored_object_pointer",
     "stored_collection_pointer",
     "stored_node_tree_pointer",
+    "stored_world_pointer",
 )
 
 
@@ -222,6 +224,21 @@ def build_scene_compositor_node_group_path(context, node_tree=None):
     return f"{scene_path}.compositing_node_group"
 
 
+def build_scene_world_path(context, world=None):
+    scene = getattr(context, "scene", None) or bpy.context.scene
+    if not isinstance(scene, bpy.types.Scene):
+        return ""
+
+    current_world = getattr(scene, "world", None)
+    if world is not None and not _same_rna_pointer(current_world, world):
+        return ""
+
+    scene_path = id_to_bpy_data_path(scene)
+    if not scene_path:
+        return ""
+    return f"{scene_path}.world"
+
+
 def get_button_property_path(context):
     ptr = getattr(context, "button_pointer", None)
     prop = getattr(context, "button_prop", None)
@@ -231,10 +248,16 @@ def get_button_property_path(context):
         return build_layer_collection_property_path(context, ptr, prop_identifier)
     if isinstance(ptr, bpy.types.Scene) and prop_identifier == "compositing_node_group":
         return build_scene_compositor_node_group_path(context)
+    if isinstance(ptr, bpy.types.Scene) and prop_identifier == "world":
+        return build_scene_world_path(context)
     if isinstance(ptr, bpy.types.NodeTree) and prop_identifier == "name":
         node_tree_path = build_scene_compositor_node_group_path(context, ptr)
         if node_tree_path:
             return node_tree_path
+    if isinstance(ptr, bpy.types.World) and prop_identifier == "name":
+        world_path = build_scene_world_path(context, ptr)
+        if world_path:
+            return world_path
 
     try:
         bpy.ops.ui.copy_data_path_button(full_path=True)
@@ -1182,6 +1205,7 @@ def stored_kind_to_property_name(kind, ptr_kind=None):
             "Object": "stored_object_pointer",
             "Collection": "stored_collection_pointer",
             "NodeTree": "stored_node_tree_pointer",
+            "World": "stored_world_pointer",
         }.get(ptr_kind)
     return {
         "FLOAT": "stored_float",
@@ -1247,6 +1271,8 @@ def get_value_and_type_from_path(path: str):
                     meta["fixed_type"] = "Collection"
                 elif isinstance(val, bpy.types.NodeTree):
                     meta["fixed_type"] = "NodeTree"
+                elif isinstance(val, bpy.types.World):
+                    meta["fixed_type"] = "World"
                 else:
                     meta["fixed_type"] = "UNKNOWN"
             elif isinstance(val, (list, tuple)):
@@ -1284,6 +1310,8 @@ def assign_stored_from_value(item, val, type, meta):
             item.stored_collection_pointer = val
         elif meta["fixed_type"] == "NodeTree":
             item.stored_node_tree_pointer = val
+        elif meta["fixed_type"] == "World":
+            item.stored_world_pointer = val
     elif type == "FLOAT":
         item.stored_kind = "FLOAT"
         item.stored_float = val
@@ -1324,6 +1352,8 @@ def get_param_stored_val(item):
             val = item.stored_collection_pointer
         elif item.stored_pointer_kind == "NodeTree":
             val = item.stored_node_tree_pointer
+        elif item.stored_pointer_kind == "World":
+            val = item.stored_world_pointer
     elif item.stored_kind == "FLOAT":
         val = item.stored_float
     elif item.stored_kind == "INT":

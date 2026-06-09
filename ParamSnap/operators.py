@@ -309,6 +309,29 @@ class PARAMS_OT_AddSceneCompositorNodeGroup(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PARAMS_OT_AddSceneWorld(bpy.types.Operator):
+    bl_idname = "param.add_scene_world"
+    bl_label = "Add Scene World"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Add the current scene world to the active snapshot"
+
+    def execute(self, context):
+        scene_path = id_to_bpy_data_path(context.scene)
+        if not scene_path:
+            self.report({"ERROR"}, translatef("Failed to get scene path"))
+            return {"CANCELLED"}
+
+        full_path = f"{scene_path}.world"
+        new_item = add_property_path_to_active_snapshot(context, full_path, translations("Scene World"))
+        if new_item is None:
+            self.report({"ERROR"}, translatef("Failed to add parameter: {path}", path=full_path))
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, translatef("Added parameter to ParamSnap: {name}", name=new_item.name))
+        redraw_areas(context)
+        return {"FINISHED"}
+
+
 class PARAM_OT_CopySelectedParams(bpy.types.Operator):
     bl_idname = "param.copy_selected_params"
     bl_label = "Copy Selected Parameters"
@@ -934,6 +957,7 @@ classes = [
     PARAM_OT_GenericMoveItemToEnd,
     PARAMS_OT_AddParamToCol,
     PARAMS_OT_AddSceneCompositorNodeGroup,
+    PARAMS_OT_AddSceneWorld,
     PARAM_OT_CopySelectedParams,
     PARAM_OT_PasteCopiedParams,
     PARAM_OT_SetCategoryFilter,
